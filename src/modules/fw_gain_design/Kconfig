@@ -1,0 +1,5 @@
+menuconfig MODULES_FW_GAIN_DESIGN
+	bool "fw_gain_design"
+	default n
+	---help---
+		Enable the fixed-wing aerodynamic gain-design advisory module.
