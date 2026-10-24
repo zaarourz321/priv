@@ -546,6 +546,40 @@ PARAM_DEFINE_FLOAT(FW_GD_EXC_RMAX, 45.0f);
 PARAM_DEFINE_FLOAT(FW_GD_EST_TC, 20.0f);
 
 /**
+ * Identification rate filter cutoff
+ *
+ * Low-pass cutoff used identically on measured body rate and normalized torque
+ * command before the discrete rate model is estimated. This avoids using noisy
+ * raw gyro angular acceleration. Keep it above the commanded excitation and
+ * below structural/servo noise.
+ *
+ * @unit Hz
+ * @min 0.1
+ * @max 10.0
+ * @decimal 2
+ * @increment 0.1
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_EST_FC, 2.0f);
+
+/**
+ * Identification control-input delay
+ *
+ * Delay between the normalized PX4 torque command and its aerodynamic effect.
+ * It represents actuator transport/servo delay and the rate-controller output
+ * timestamp alignment. Use the default for normal PWM servos; tune only if a
+ * repeatable test reports poor fit.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 0.30
+ * @decimal 3
+ * @increment 0.01
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_EST_DLY, 0.06f);
+
+/**
  * Minimum identification samples
  *
  * A completed test needs at least this many accepted samples before its

@@ -365,7 +365,8 @@ void FwGainDesign::reset_estimator(Axis axis)
 	estimator = {};
 
 	// Large diagonal covariance permits convergence from no a-priori estimate,
-	// while retaining a well-conditioned 3-parameter (a, b, offset) RLS model.
+	// while retaining a well-conditioned 3-parameter discrete (A, B, offset)
+	// RLS model.
 	for (uint8_t i = 0; i < 3; ++i) {
 		estimator.covariance[i][i] = 1e3f;
 	}
@@ -377,30 +378,66 @@ void FwGainDesign::reset_estimator(Axis axis)
 	_identified_rate_a[static_cast<uint8_t>(axis)] = NAN;
 	_identified_rate_b[static_cast<uint8_t>(axis)] = NAN;
 	_identified_airspeed[static_cast<uint8_t>(axis)] = NAN;
+	_identification_reject_reason[static_cast<uint8_t>(axis)] = fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN;
 	_last_estimator_sample = 0;
 }
 
-void FwGainDesign::update_estimator(Axis axis, float rate, float angular_acceleration, float torque,
-		float true_airspeed, float dt)
+void FwGainDesign::update_estimator(Axis axis, float rate, float torque, float true_airspeed, float dt)
 {
 	const uint8_t axis_index = static_cast<uint8_t>(axis);
 	RateEstimator &estimator = _estimator[axis_index];
 
-	if (!estimator.initialized || !PX4_ISFINITE(rate) || !PX4_ISFINITE(angular_acceleration)
-	    || !PX4_ISFINITE(torque) || !PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f
+	if (!estimator.initialized || !PX4_ISFINITE(rate) || !PX4_ISFINITE(torque)
+	    || !PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f
 	    || !PX4_ISFINITE(dt) || dt <= 0.f) {
 		return;
 	}
 
 	const float time_constant = _param_fw_gd_est_tc.get();
+	const float filter_cutoff_hz = _param_fw_gd_est_fc.get();
+	const float input_delay_s = _param_fw_gd_est_dly.get();
 
-	if (!PX4_ISFINITE(time_constant) || time_constant <= dt) {
+	if (!PX4_ISFINITE(time_constant) || time_constant <= dt || !PX4_ISFINITE(filter_cutoff_hz)
+	    || filter_cutoff_hz <= 0.f || !PX4_ISFINITE(input_delay_s) || input_delay_s < 0.f) {
 		return;
 	}
 
+	// The sensor's angular acceleration is intentionally not used here. At the
+	// low frequencies of an aircraft flight test it is derivative-noise
+	// dominated. Instead identify the equivalent discrete plant directly from a
+	// equally filtered rate and control command, then convert A/B to a/b when
+	// the test is complete.
+	const float filter_time_constant = 1.f / (2.f * M_PI_F * filter_cutoff_hz);
+	const float filter_alpha = math::constrain(dt / (dt + filter_time_constant), 0.001f, 0.95f);
+
+	if (!estimator.filters_initialized) {
+		estimator.filtered_rate = rate;
+		estimator.previous_filtered_rate = rate;
+		estimator.filtered_torque = torque;
+
+		for (float &history_sample : estimator.torque_history) {
+			history_sample = torque;
+		}
+
+		estimator.filters_initialized = true;
+		return;
+	}
+
+	estimator.filtered_rate += filter_alpha * (rate - estimator.filtered_rate);
+	estimator.filtered_torque += filter_alpha * (torque - estimator.filtered_torque);
+
+	const int delay_samples = math::constrain(static_cast<int>(roundf(input_delay_s / dt)), 0,
+			static_cast<int>(kTorqueHistoryLength) - 1);
+	estimator.torque_history[estimator.torque_history_index] = estimator.filtered_torque;
+	const uint8_t delayed_index = static_cast<uint8_t>((estimator.torque_history_index + kTorqueHistoryLength
+			- static_cast<uint8_t>(delay_samples)) % kTorqueHistoryLength);
+	const float delayed_torque = estimator.torque_history[delayed_index];
+	estimator.torque_history_index = static_cast<uint8_t>((estimator.torque_history_index + 1U) % kTorqueHistoryLength);
+
+	// rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
 	// The offset makes trim torque and slow navigation corrections harmless.
-	// The plant terms remain exactly rate_dot = a * rate + b * command.
-	const float phi[3] = {rate, torque, 1.f};
+	const float phi[3] = {estimator.previous_filtered_rate, delayed_torque, 1.f};
+	const float measured_rate = estimator.filtered_rate;
 	float covariance_phi[3] {};
 
 	for (uint8_t i = 0; i < 3; ++i) {
@@ -420,13 +457,13 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float angular_acceler
 		return;
 	}
 
-	float predicted_acceleration = 0.f;
+	float predicted_rate = 0.f;
 
 	for (uint8_t i = 0; i < 3; ++i) {
-		predicted_acceleration += phi[i] * estimator.theta[i];
+		predicted_rate += phi[i] * estimator.theta[i];
 	}
 
-	const float innovation = angular_acceleration - predicted_acceleration;
+	const float innovation = measured_rate - predicted_rate;
 
 	for (uint8_t i = 0; i < 3; ++i) {
 		estimator.theta[i] += covariance_phi[i] * innovation / denominator;
@@ -448,12 +485,29 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float angular_acceler
 		}
 	}
 
-	estimator.residual_sum_sq += innovation * innovation;
-	estimator.output_sum_sq += angular_acceleration * angular_acceleration;
-	estimator.command_sum += torque;
-	estimator.command_sum_sq += torque * torque;
+	float fitted_rate = 0.f;
+
+	for (uint8_t i = 0; i < 3; ++i) {
+		fitted_rate += phi[i] * estimator.theta[i];
+	}
+
+	// Do not grade the intentional RLS convergence transient. The score below
+	// is a post-update, low-frequency rate-model residual, not raw gyro
+	// acceleration noise.
+	if (estimator.sample_count >= kEstimatorWarmupSamples) {
+		const float residual = measured_rate - fitted_rate;
+		estimator.residual_sum_sq += residual * residual;
+		estimator.output_sum_sq += measured_rate * measured_rate;
+		estimator.output_sum += measured_rate;
+		estimator.fit_sample_count++;
+	}
+
+	estimator.command_sum += delayed_torque;
+	estimator.command_sum_sq += delayed_torque * delayed_torque;
 	estimator.airspeed_sum += true_airspeed;
+	estimator.dt_sum += dt;
 	estimator.sample_count++;
+	estimator.previous_filtered_rate = estimator.filtered_rate;
 }
 
 void FwGainDesign::finalize_estimate(Axis axis)
@@ -462,7 +516,8 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	const RateEstimator &estimator = _estimator[axis_index];
 	const float min_samples = static_cast<float>(_param_fw_gd_est_min.get());
 
-	if (!estimator.initialized || estimator.sample_count < min_samples || estimator.sample_count == 0) {
+	if (!estimator.initialized || estimator.sample_count < min_samples || estimator.fit_sample_count == 0) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INSUFFICIENT_SAMPLES;
 		return;
 	}
 
@@ -478,19 +533,53 @@ void FwGainDesign::finalize_estimate(Axis axis)
 		_param_fw_gd_r_max.get(), _param_fw_gd_p_max.get(), _param_fw_gd_y_max.get()
 	};
 	const float airspeed = estimator.airspeed_sum / estimator.sample_count;
-	const float rate_a = estimator.theta[0];
-	const float rate_b = estimator.theta[1];
+	const float mean_dt = estimator.dt_sum / estimator.sample_count;
+	const float discrete_a = estimator.theta[0];
+	const float discrete_b = estimator.theta[1];
+	const float rate_a = PX4_ISFINITE(discrete_a) && discrete_a > FLT_EPSILON && PX4_ISFINITE(mean_dt) && mean_dt > 0.f
+			? logf(discrete_a) / mean_dt : NAN;
+	const float rate_b = PX4_ISFINITE(rate_a) && PX4_ISFINITE(discrete_b)
+			? (fabsf(discrete_a - 1.f) > 1e-3f ? rate_a * discrete_b / (discrete_a - 1.f) : discrete_b / mean_dt) : NAN;
 	const float length = reference_length[axis_index];
 	const float command_mean = estimator.command_sum / estimator.sample_count;
 	const float command_variance = estimator.command_sum_sq / estimator.sample_count - command_mean * command_mean;
-	const float fit_denominator = sqrtf(estimator.output_sum_sq / estimator.sample_count);
-	const float fit = sqrtf(estimator.residual_sum_sq / estimator.sample_count) / fmaxf(fit_denominator, 0.01f);
+	const float output_mean = estimator.output_sum / estimator.fit_sample_count;
+	const float output_variance = fmaxf(estimator.output_sum_sq / estimator.fit_sample_count - output_mean * output_mean, 0.f);
+	const float fit_denominator = sqrtf(output_variance);
+	const float fit = sqrtf(estimator.residual_sum_sq / estimator.fit_sample_count) / fmaxf(fit_denominator, 0.005f);
+
+	// Publish candidates even when rejected so the flight log tells the operator
+	// why a result failed. Only identification_valid permits their use as a
+	// model source or for live gain scheduling.
+	_identified_airspeed[axis_index] = airspeed;
+	_identified_rate_a[axis_index] = rate_a;
+	_identified_rate_b[axis_index] = rate_b;
 
 	if (!PX4_ISFINITE(rho) || !PX4_ISFINITE(sref) || !PX4_ISFINITE(length) || !PX4_ISFINITE(inertia[axis_index])
 	    || !PX4_ISFINITE(control_range[axis_index]) || !PX4_ISFINITE(airspeed) || !PX4_ISFINITE(rate_a)
 	    || !PX4_ISFINITE(rate_b) || !PX4_ISFINITE(fit) || rho <= 0.f || sref <= 0.f || length <= 0.f
-	    || inertia[axis_index] <= 0.f || control_range[axis_index] <= 0.f || airspeed <= 0.f
-	    || rate_a >= -0.02f || rate_b <= 0.f || command_variance < 1e-4f || fit > 0.5f) {
+	    || inertia[axis_index] <= 0.f || control_range[axis_index] <= 0.f || airspeed <= 0.f) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_INPUT;
+		return;
+	}
+
+	if (rate_a >= -0.02f) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_UNSTABLE_DAMPING;
+		return;
+	}
+
+	if (rate_b <= 0.f) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_CONTROL_DIRECTION;
+		return;
+	}
+
+	if (command_variance < 1e-4f) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_LOW_EXCITATION;
+		return;
+	}
+
+	if (fit > 0.5f) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_POOR_FIT;
 		return;
 	}
 
@@ -499,17 +588,17 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	const float control_derivative = 2.f * inertia[axis_index] * rate_b
 						 / (rho * airspeed * airspeed * sref * length * control_range[axis_index]);
 
+	_identified_damping_derivative[axis_index] = damping_derivative;
+	_identified_control_derivative[axis_index] = control_derivative;
+
 	if (!PX4_ISFINITE(damping_derivative) || !PX4_ISFINITE(control_derivative)
 	    || damping_derivative >= 0.f || control_derivative <= 0.f) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_DERIVATIVE;
 		return;
 	}
 
-	_identified_rate_a[axis_index] = rate_a;
-	_identified_rate_b[axis_index] = rate_b;
-	_identified_airspeed[axis_index] = airspeed;
-	_identified_damping_derivative[axis_index] = damping_derivative;
-	_identified_control_derivative[axis_index] = control_derivative;
 	_identified_valid[axis_index] = true;
+	_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_VALID;
 }
 
 bool FwGainDesign::flight_test_conditions_met(Axis axis, float &true_airspeed) const
@@ -684,8 +773,8 @@ void FwGainDesign::update_flight_test()
 
 		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f
 		    && hrt_elapsed_time(&torque_setpoint.timestamp) < 100_ms) {
-			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], angular_velocity.xyz_derivative[axis_index],
-					 torque_setpoint.xyz[axis_index], true_airspeed, dt);
+			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], torque_setpoint.xyz[axis_index],
+					 true_airspeed, dt);
 		}
 	}
 
@@ -708,14 +797,19 @@ void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
 		design.identified_control_derivative[axis] = _identified_control_derivative[axis];
 		design.identification_valid[axis] = _identified_valid[axis];
 
-		if (_estimator[axis].sample_count > 0) {
-			const float rms_output = sqrtf(_estimator[axis].output_sum_sq / _estimator[axis].sample_count);
-			design.identification_fit[axis] = sqrtf(_estimator[axis].residual_sum_sq / _estimator[axis].sample_count)
-								   / fmaxf(rms_output, 0.01f);
+		if (_estimator[axis].fit_sample_count > 0) {
+			const float output_mean = _estimator[axis].output_sum / _estimator[axis].fit_sample_count;
+			const float output_variance = fmaxf(_estimator[axis].output_sum_sq / _estimator[axis].fit_sample_count
+									 - output_mean * output_mean, 0.f);
+			const float rms_output = sqrtf(output_variance);
+			design.identification_fit[axis] = sqrtf(_estimator[axis].residual_sum_sq / _estimator[axis].fit_sample_count)
+								   / fmaxf(rms_output, 0.005f);
 
 		} else {
 			design.identification_fit[axis] = NAN;
 		}
+
+		design.identification_reject_reason[axis] = _identification_reject_reason[axis];
 	}
 
 	design.excitation_state = _excitation_state;

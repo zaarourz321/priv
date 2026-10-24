@@ -81,9 +81,10 @@ uint8 EXCITATION_ABORT_PILOT_INPUT = 4
 uint8 EXCITATION_ABORT_RATE_LIMIT = 5
 uint8 EXCITATION_ABORT_YAW_DAMPER = 6
 
-# Identified linear rate models. They use rate_dot = a * rate + b * command
-# and are converted to the normal non-dimensional derivatives below at the
-# identified true airspeed. Invalid or unavailable values are NaN.
+# Identified linear rate models. The estimator fits a low-pass-filtered,
+# delay-compensated discrete rate model and converts it to rate_dot = a * rate
+# + b * command. Candidate values are published even when they are rejected;
+# only identification_valid permits them to be used for gain design.
 uint32[3] identification_sample_count
 float32[3] identified_airspeed
 float32[3] identified_rate_a
@@ -92,3 +93,16 @@ float32[3] identified_damping_derivative # Cl_p, Cm_q, Cn_r
 float32[3] identified_control_derivative # Cl_du, Cm_du, Cn_du [per rad]
 float32[3] identification_fit            # normalized RMS residual, lower is better
 bool[3] identification_valid
+
+# Per-axis reason why a completed candidate was rejected. A value of VALID is
+# only meaningful when the corresponding identification_valid element is true.
+uint8[3] identification_reject_reason
+uint8 IDENTIFICATION_REJECT_NOT_RUN = 0
+uint8 IDENTIFICATION_REJECT_VALID = 1
+uint8 IDENTIFICATION_REJECT_INSUFFICIENT_SAMPLES = 2
+uint8 IDENTIFICATION_REJECT_INVALID_INPUT = 3
+uint8 IDENTIFICATION_REJECT_UNSTABLE_DAMPING = 4
+uint8 IDENTIFICATION_REJECT_CONTROL_DIRECTION = 5
+uint8 IDENTIFICATION_REJECT_LOW_EXCITATION = 6
+uint8 IDENTIFICATION_REJECT_POOR_FIT = 7
+uint8 IDENTIFICATION_REJECT_INVALID_DERIVATIVE = 8

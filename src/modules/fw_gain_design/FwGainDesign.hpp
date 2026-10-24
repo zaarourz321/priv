@@ -92,7 +92,7 @@ private:
 	void calculate_design(float true_airspeed, fw_gain_design_s &design) const;
 	void update_flight_test();
 	void reset_estimator(Axis axis);
-	void update_estimator(Axis axis, float rate, float angular_acceleration, float torque, float true_airspeed, float dt);
+	void update_estimator(Axis axis, float rate, float torque, float true_airspeed, float dt);
 	void finalize_estimate(Axis axis);
 	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
 	bool model_source_is_estimated(Axis axis) const;
@@ -109,15 +109,30 @@ private:
 	bool capture_axis_baseline(Axis axis);
 	uint8_t validate_common_inputs() const;
 
+	static constexpr uint8_t kTorqueHistoryLength = 20;
+	static constexpr uint32_t kEstimatorWarmupSamples = 100;
+
 	struct RateEstimator {
-		float theta[3] {}; // a, b, constant offset: rate_dot = a * rate + b * command + offset
+		// Discrete first-order model: rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
+		// Identifying rate directly avoids differentiating a noisy gyro signal. A and B
+		// are converted to the continuous a and b coefficients only after the test.
+		float theta[3] {}; // A, B, constant offset
 		float covariance[3][3] {};
 		float residual_sum_sq{0.f};
 		float output_sum_sq{0.f};
+		float output_sum{0.f};
 		float command_sum{0.f};
 		float command_sum_sq{0.f};
 		float airspeed_sum{0.f};
+		float dt_sum{0.f};
+		float filtered_rate{NAN};
+		float previous_filtered_rate{NAN};
+		float filtered_torque{NAN};
+		float torque_history[kTorqueHistoryLength] {};
 		uint32_t sample_count{0};
+		uint32_t fit_sample_count{0};
+		uint8_t torque_history_index{0};
+		bool filters_initialized{false};
 		bool initialized{false};
 	};
 
@@ -146,6 +161,11 @@ private:
 	float _identified_rate_b[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_airspeed[AXIS_COUNT] {NAN, NAN, NAN};
 	bool _identified_valid[AXIS_COUNT] {};
+	uint8_t _identification_reject_reason[AXIS_COUNT] {
+		fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN,
+		fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN,
+		fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN
+	};
 
 	uint8_t _excitation_state{fw_gain_design_s::EXCITATION_STATE_IDLE};
 	uint8_t _excitation_abort_reason{fw_gain_design_s::EXCITATION_ABORT_NONE};
@@ -212,6 +232,8 @@ private:
 		(ParamFloat<px4::params::FW_GD_EXC_TIME>) _param_fw_gd_exc_time,
 		(ParamFloat<px4::params::FW_GD_EXC_RMAX>) _param_fw_gd_exc_rmax,
 		(ParamFloat<px4::params::FW_GD_EST_TC>) _param_fw_gd_est_tc,
+		(ParamFloat<px4::params::FW_GD_EST_FC>) _param_fw_gd_est_fc,
+		(ParamFloat<px4::params::FW_GD_EST_DLY>) _param_fw_gd_est_dly,
 		(ParamInt<px4::params::FW_GD_EST_MIN>) _param_fw_gd_est_min,
 		(ParamInt<px4::params::FW_GD_APPLY_R>) _param_fw_gd_apply_r,
 		(ParamInt<px4::params::FW_GD_APPLY_P>) _param_fw_gd_apply_p,
