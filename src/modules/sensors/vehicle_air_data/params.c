@@ -55,15 +55,19 @@ PARAM_DEFINE_FLOAT(SENS_BARO_QNH, 1013.25f);
 PARAM_DEFINE_FLOAT(SENS_BARO_RATE, 20.0f);
 
 /**
- * Enable preflight automatic QNH calibration
+ * Preflight barometer reference mode
  *
- * Uses the selected raw GPS altitude above MSL and selected barometer
- * pressure. Calibration requires a stationary vehicle and valid GPS quality.
- * The module never writes SENS_BARO_QNH while armed. Valid samples are
- * filtered for 15 seconds, then QNH is changed by at most 0.5 hPa every
- * 15 seconds.
+ * Selects how SENS_BARO_QNH is calibrated while disarmed. GPS MSL mode
+ * requires a stationary vehicle and valid GPS quality. Ground zero mode
+ * uses only selected barometer pressure to set the current ground altitude
+ * to zero (QFE), so it is not an MSL reference. The module never writes
+ * SENS_BARO_QNH while armed.
  *
- * @boolean
+ * @value 0 Disabled
+ * @value 1 GPS MSL
+ * @value 2 Ground zero (QFE/AGL)
+ * @min 0
+ * @max 2
  * @group Barometer QNH Calibration
  */
-PARAM_DEFINE_INT32(BQNH_EN, 0);
+PARAM_DEFINE_INT32(BQNH_MODE, 0);

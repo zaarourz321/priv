@@ -13,8 +13,4 @@ float32 rho				# air density
 
 uint8 calibration_count     # Calibration changed counter. Monotonically increases whenever calibration changes.
 
-# Preflight automatic QNH calibration status (BQNH_EN): 0 disabled, 1 waiting
-# for arming state, 2 held because armed, 3 waiting for GPS, 4 rejected GPS
-# sample, 5 learning, 6 tracking, 7 parameter write error.
-uint8 qnh_calibration_state
-float32 qnh_estimate_hpa    # Filtered preflight QNH estimate, hPa (NaN when unavailable)
+float32 qnh_hpa             # Filtered preflight QNH estimate, hPa (NaN when unavailable)

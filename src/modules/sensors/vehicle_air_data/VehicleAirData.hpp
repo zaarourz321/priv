@@ -138,14 +138,13 @@ private:
 	bool _qnh_was_armed{false};
 	float _qnh_estimate_hpa{NAN};
 	uint16_t _qnh_valid_sample_count{0};
-	uint8_t _qnh_state{0};
 	hrt_abstime _qnh_last_sample{0};
 	hrt_abstime _qnh_last_parameter_write{0};
 
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::SENS_BARO_QNH>) _param_sens_baro_qnh,
 		(ParamFloat<px4::params::SENS_BARO_RATE>) _param_sens_baro_rate,
-		(ParamInt<px4::params::BQNH_EN>) _param_bqnh_en
+		(ParamInt<px4::params::BQNH_MODE>) _param_bqnh_mode
 	)
 };
 }; // namespace sensors
