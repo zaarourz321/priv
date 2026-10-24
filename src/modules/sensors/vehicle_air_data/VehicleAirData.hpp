@@ -33,6 +33,8 @@
 
 #pragma once
 
+#include <cmath>
+
 #include "data_validator/DataValidatorGroup.hpp"
 
 #include <lib/sensor_calibration/Barometer.hpp>
@@ -49,11 +51,13 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionMultiArray.hpp>
 #include <uORB/SubscriptionCallback.hpp>
+#include <uORB/topics/actuator_armed.h>
 #include <uORB/topics/differential_pressure.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/sensor_baro.h>
 #include <uORB/topics/sensors_status.h>
 #include <uORB/topics/vehicle_air_data.h>
+#include <uORB/topics/sensor_gps.h>
 
 using namespace time_literals;
 
@@ -78,6 +82,7 @@ private:
 	void CheckFailover(const hrt_abstime &time_now_us);
 	bool ParametersUpdate(bool force = false);
 	void UpdateStatus();
+	void UpdateQnhCalibration(const vehicle_air_data_s &air_data, const hrt_abstime &time_now_us);
 
 	float PressureToAltitude(float pressure_pa, float temperature = 15.f) const;
 
@@ -90,6 +95,8 @@ private:
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
 
 	uORB::Subscription _differential_pressure_sub{ORB_ID(differential_pressure)};
+	uORB::Subscription _actuator_armed_sub{ORB_ID(actuator_armed)};
+	uORB::Subscription _vehicle_gps_position_sub{ORB_ID(vehicle_gps_position)};
 
 	uORB::SubscriptionCallbackWorkItem _sensor_sub[MAX_SENSOR_COUNT] {
 		{this, ORB_ID(sensor_baro), 0},
@@ -125,9 +132,20 @@ private:
 
 	float _air_temperature_celsius{20.f}; // initialize with typical 20degC ambient temperature
 
+	actuator_armed_s _actuator_armed{};
+	sensor_gps_s _vehicle_gps_position{};
+	bool _actuator_armed_valid{false};
+	bool _qnh_was_armed{false};
+	float _qnh_estimate_hpa{NAN};
+	uint16_t _qnh_valid_sample_count{0};
+	uint8_t _qnh_state{0};
+	hrt_abstime _qnh_last_sample{0};
+	hrt_abstime _qnh_last_parameter_write{0};
+
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::SENS_BARO_QNH>) _param_sens_baro_qnh,
-		(ParamFloat<px4::params::SENS_BARO_RATE>) _param_sens_baro_rate
+		(ParamFloat<px4::params::SENS_BARO_RATE>) _param_sens_baro_rate,
+		(ParamInt<px4::params::BQNH_EN>) _param_bqnh_en
 	)
 };
 }; // namespace sensors

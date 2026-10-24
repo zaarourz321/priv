@@ -53,3 +53,17 @@ PARAM_DEFINE_FLOAT(SENS_BARO_QNH, 1013.25f);
  * @unit Hz
  */
 PARAM_DEFINE_FLOAT(SENS_BARO_RATE, 20.0f);
+
+/**
+ * Enable preflight automatic QNH calibration
+ *
+ * Uses the selected raw GPS altitude above MSL and selected barometer
+ * pressure. Calibration requires a stationary vehicle and valid GPS quality.
+ * The module never writes SENS_BARO_QNH while armed. Valid samples are
+ * filtered for 15 seconds, then QNH is changed by at most 0.5 hPa every
+ * 15 seconds.
+ *
+ * @boolean
+ * @group Barometer QNH Calibration
+ */
+PARAM_DEFINE_INT32(BQNH_EN, 0);

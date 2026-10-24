@@ -33,7 +33,11 @@
 
 #include "VehicleAirData.hpp"
 
+#include <float.h>
+
+#include <drivers/drv_hrt.h>
 #include <px4_platform_common/log.h>
+#include <px4_platform_common/defines.h>
 #include <px4_platform_common/events.h>
 #include <lib/geo/geo.h>
 
@@ -43,6 +47,28 @@ namespace sensors
 using namespace matrix;
 
 static constexpr uint32_t SENSOR_TIMEOUT{300_ms};
+
+static constexpr float QNH_MIN_HPA{800.f};
+static constexpr float QNH_MAX_HPA{1100.f};
+static constexpr float QNH_MAX_EPV_M{5.f};
+static constexpr float QNH_MAX_GROUND_SPEED_M_S{0.5f};
+static constexpr float QNH_OUTLIER_HPA{3.f};
+static constexpr float QNH_MIN_CHANGE_HPA{0.1f};
+static constexpr float QNH_FILTER_ALPHA{1.f / 30.f};
+static constexpr float QNH_MAX_STEP_HPA{0.5f};
+static constexpr hrt_abstime QNH_SAMPLE_INTERVAL_US{1_s};
+static constexpr hrt_abstime QNH_WRITE_INTERVAL_US{15_s};
+static constexpr hrt_abstime QNH_INPUT_TIMEOUT_US{2_s};
+static constexpr uint8_t QNH_MIN_SATELLITES{6};
+static constexpr uint16_t QNH_MIN_VALID_SAMPLES{15};
+static constexpr uint8_t QNH_STATE_DISABLED{0};
+static constexpr uint8_t QNH_STATE_WAITING_FOR_ARM_STATUS{1};
+static constexpr uint8_t QNH_STATE_FROZEN_ARMED{2};
+static constexpr uint8_t QNH_STATE_WAITING_FOR_GPS{3};
+static constexpr uint8_t QNH_STATE_GPS_REJECTED{4};
+static constexpr uint8_t QNH_STATE_LEARNING{5};
+static constexpr uint8_t QNH_STATE_TRACKING{6};
+static constexpr uint8_t QNH_STATE_PARAMETER_WRITE_ERROR{7};
 
 VehicleAirData::VehicleAirData() :
 	ModuleParams(nullptr),
@@ -136,6 +162,12 @@ void VehicleAirData::Run()
 	const hrt_abstime time_now_us = hrt_absolute_time();
 
 	const bool parameter_update = ParametersUpdate();
+
+	if (_actuator_armed_sub.update(&_actuator_armed)) {
+		_actuator_armed_valid = true;
+	}
+
+	_vehicle_gps_position_sub.update(&_vehicle_gps_position);
 
 	AirTemperatureUpdate();
 
@@ -268,6 +300,9 @@ void VehicleAirData::Run()
 						out.calibration_count = _calibration[instance].calibration_count();
 						out.timestamp = hrt_absolute_time();
 
+						UpdateQnhCalibration(out, time_now_us);
+						out.qnh_calibration_state = _qnh_state;
+						out.qnh_estimate_hpa = _qnh_estimate_hpa;
 						_vehicle_air_data_pub.publish(out);
 					}
 
@@ -293,6 +328,102 @@ void VehicleAirData::Run()
 	ScheduleDelayed(50_ms);
 
 	perf_end(_cycle_perf);
+}
+
+void VehicleAirData::UpdateQnhCalibration(const vehicle_air_data_s &air_data, const hrt_abstime &time_now_us)
+{
+	const bool enabled = _param_bqnh_en.get() != 0;
+	const bool armed = _actuator_armed_valid && _actuator_armed.armed;
+
+	if (_actuator_armed_valid && armed != _qnh_was_armed) {
+		_qnh_was_armed = armed;
+		_qnh_estimate_hpa = NAN;
+		_qnh_valid_sample_count = 0;
+		_qnh_last_sample = 0;
+	}
+
+	if (!enabled) {
+		_qnh_state = QNH_STATE_DISABLED;
+		_qnh_estimate_hpa = NAN;
+		_qnh_valid_sample_count = 0;
+
+	} else if (!_actuator_armed_valid || hrt_elapsed_time(&_actuator_armed.timestamp) > QNH_INPUT_TIMEOUT_US) {
+		_qnh_state = QNH_STATE_WAITING_FOR_ARM_STATUS;
+
+	} else if (armed) {
+		// No calibration writes occur in this state: SENS_BARO_QNH is held for flight.
+		_qnh_state = QNH_STATE_FROZEN_ARMED;
+
+	} else if (_qnh_last_sample == 0 || time_now_us - _qnh_last_sample >= QNH_SAMPLE_INTERVAL_US) {
+		_qnh_last_sample = time_now_us;
+
+		const float altitude_msl_m = _vehicle_gps_position.alt * 1e-3f;
+		const float current_qnh_hpa = _param_sens_baro_qnh.get();
+		const bool input_valid = (_vehicle_gps_position.timestamp != 0)
+					 && (hrt_elapsed_time(&_vehicle_gps_position.timestamp) <= QNH_INPUT_TIMEOUT_US)
+					 && (_vehicle_gps_position.fix_type >= 3)
+					 && (_vehicle_gps_position.satellites_used >= QNH_MIN_SATELLITES)
+					 && _vehicle_gps_position.vel_ned_valid
+					 && PX4_ISFINITE(_vehicle_gps_position.epv)
+					 && (_vehicle_gps_position.epv > 0.f)
+					 && (_vehicle_gps_position.epv <= QNH_MAX_EPV_M)
+					 && PX4_ISFINITE(_vehicle_gps_position.vel_m_s)
+					 && (_vehicle_gps_position.vel_m_s <= QNH_MAX_GROUND_SPEED_M_S)
+					 && PX4_ISFINITE(current_qnh_hpa)
+					 && (current_qnh_hpa >= QNH_MIN_HPA) && (current_qnh_hpa <= QNH_MAX_HPA);
+
+		if (!input_valid) {
+			_qnh_state = (_vehicle_gps_position.timestamp == 0)
+				     ? QNH_STATE_WAITING_FOR_GPS : QNH_STATE_GPS_REJECTED;
+
+		} else {
+			// Linearize the same ISA pressure-altitude equation used by
+			// PressureToAltitude() about the current QNH. Small, rate-limited
+			// QNH updates re-linearize after every applied correction.
+			const float temperature_k = 15.f - CONSTANTS_ABSOLUTE_NULL_CELSIUS - 6.5e-3f * air_data.baro_alt_meter;
+			const float meters_per_hpa = temperature_k * CONSTANTS_AIR_GAS_CONST / (CONSTANTS_ONE_G * current_qnh_hpa);
+			const float qnh_estimate_hpa = current_qnh_hpa + (altitude_msl_m - air_data.baro_alt_meter) / meters_per_hpa;
+
+			if (!PX4_ISFINITE(qnh_estimate_hpa) || qnh_estimate_hpa < QNH_MIN_HPA || qnh_estimate_hpa > QNH_MAX_HPA
+			    || (PX4_ISFINITE(_qnh_estimate_hpa) && fabsf(qnh_estimate_hpa - _qnh_estimate_hpa) > QNH_OUTLIER_HPA)) {
+				_qnh_state = QNH_STATE_GPS_REJECTED;
+
+			} else {
+				_qnh_estimate_hpa = PX4_ISFINITE(_qnh_estimate_hpa) ?
+						    _qnh_estimate_hpa + QNH_FILTER_ALPHA * (qnh_estimate_hpa - _qnh_estimate_hpa) : qnh_estimate_hpa;
+
+				if (_qnh_valid_sample_count < UINT16_MAX) {
+					_qnh_valid_sample_count++;
+				}
+
+				_qnh_state = (_qnh_valid_sample_count < QNH_MIN_VALID_SAMPLES)
+						     ? QNH_STATE_LEARNING : QNH_STATE_TRACKING;
+
+				const float qnh_error_hpa = _qnh_estimate_hpa - current_qnh_hpa;
+
+				if (_qnh_valid_sample_count >= QNH_MIN_VALID_SAMPLES
+				    && (_qnh_last_parameter_write == 0 || time_now_us - _qnh_last_parameter_write >= QNH_WRITE_INTERVAL_US)
+				    && fabsf(qnh_error_hpa) >= QNH_MIN_CHANGE_HPA) {
+					if (_actuator_armed_sub.update(&_actuator_armed)) {
+						_actuator_armed_valid = true;
+					}
+
+					if (!_actuator_armed.armed) {
+						_param_sens_baro_qnh.set(current_qnh_hpa
+									 + math::constrain(qnh_error_hpa, -QNH_MAX_STEP_HPA, QNH_MAX_STEP_HPA));
+
+						if (_param_sens_baro_qnh.commit()) {
+							_qnh_last_parameter_write = time_now_us;
+
+						} else {
+							_param_sens_baro_qnh.update();
+							_qnh_state = QNH_STATE_PARAMETER_WRITE_ERROR;
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 float VehicleAirData::PressureToAltitude(float pressure_pa, float temperature) const
