@@ -46,14 +46,38 @@ FwGainDesign::FwGainDesign() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::lp_default)
 {
+	_rate_p_param[ROLL] = param_find("FW_RR_P");
+	_rate_p_param[PITCH] = param_find("FW_PR_P");
+	_rate_p_param[YAW] = param_find("FW_YR_P");
+	_rate_i_param[ROLL] = param_find("FW_RR_I");
+	_rate_i_param[PITCH] = param_find("FW_PR_I");
+	_rate_i_param[YAW] = param_find("FW_YR_I");
+	_rate_ff_param[ROLL] = param_find("FW_RR_FF");
+	_rate_ff_param[PITCH] = param_find("FW_PR_FF");
+	_rate_ff_param[YAW] = param_find("FW_YR_FF");
+	_attitude_tc_param[ROLL] = param_find("FW_R_TC");
+	_attitude_tc_param[PITCH] = param_find("FW_P_TC");
 	updateParams();
 	reset_schedule();
 }
 
+FwGainDesign::~FwGainDesign()
+{
+	bool changed = false;
+
+	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+		changed |= restore_axis(static_cast<Axis>(axis));
+	}
+
+	if (changed) {
+		param_notify_changes();
+	}
+}
+
 bool FwGainDesign::init()
 {
-	// The module has no flight-control subscriptions or publications. Running
-	// periodically makes all parameter edits live without touching the values.
+	// The published design is always advisory until one of the explicit axis
+	// apply switches is enabled.
 	ScheduleOnInterval(100_ms);
 	return true;
 }
@@ -61,9 +85,7 @@ bool FwGainDesign::init()
 uint8_t FwGainDesign::validate_common_inputs() const
 {
 	const float values[] = {
-		_param_fw_gd_rho.get(), _param_fw_gd_sref.get(), _param_fw_gd_bref.get(), _param_fw_gd_cref.get(),
-		_param_fw_gd_ix.get(), _param_fw_gd_iy.get(), _param_fw_gd_iz.get(),
-		_param_fw_gd_r_max.get(), _param_fw_gd_p_max.get(), _param_fw_gd_y_max.get()
+		_param_fw_gd_rho.get(), _param_fw_gd_sref.get()
 	};
 
 	for (float value : values) {
@@ -103,15 +125,9 @@ void FwGainDesign::reset_schedule()
 	_schedule_status = fw_gain_design_s::SCHEDULE_STATUS_VALID;
 }
 
-void FwGainDesign::publish_next_design_point()
+void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &design) const
 {
-	fw_gain_design_s design{};
-	design.timestamp = hrt_absolute_time();
-	design.calculation_id = _calculation_id;
-	design.speed_count = _speed_count;
-	design.speed_index = _speed_index;
-	design.schedule_status = _schedule_status;
-	design.airspeed = NAN;
+	design.airspeed = true_airspeed;
 	design.px4_airspeed = NAN;
 
 	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
@@ -134,15 +150,9 @@ void FwGainDesign::publish_next_design_point()
 		design.attitude_tc[axis] = NAN;
 	}
 
-	if (_schedule_status != fw_gain_design_s::SCHEDULE_STATUS_VALID || _speed_count == 0) {
-		_gain_design_pub.publish(design);
+	if (!PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f) {
 		return;
 	}
-
-	const float vmin = _param_fw_gd_vmin.get();
-	const float vmax = _param_fw_gd_vmax.get();
-	const float vstep = _param_fw_gd_vstep.get();
-	design.airspeed = (_speed_index + 1U >= _speed_count) ? vmax : vmin + _speed_index * vstep;
 
 	const uint8_t common_input_status = validate_common_inputs();
 
@@ -304,13 +314,218 @@ void FwGainDesign::publish_next_design_point()
 			design.axis_status[axis] = common_input_status;
 		}
 	}
+}
+
+
+void FwGainDesign::publish_next_design_point()
+{
+	fw_gain_design_s design{};
+	design.timestamp = hrt_absolute_time();
+	design.calculation_id = _calculation_id;
+	design.speed_count = _speed_count;
+	design.speed_index = _speed_index;
+	design.schedule_status = _schedule_status;
+
+	if (_schedule_status == fw_gain_design_s::SCHEDULE_STATUS_VALID && _speed_count > 0) {
+		const float vmin = _param_fw_gd_vmin.get();
+		const float vmax = _param_fw_gd_vmax.get();
+		const float vstep = _param_fw_gd_vstep.get();
+		const float true_airspeed = (_speed_index + 1U >= _speed_count) ? vmax : vmin + _speed_index * vstep;
+		calculate_design(true_airspeed, design);
+
+		_speed_index++;
+
+		if (_speed_index >= _speed_count) {
+			_speed_index = 0;
+		}
+
+	} else {
+		calculate_design(NAN, design);
+	}
 
 	_gain_design_pub.publish(design);
+}
 
-	_speed_index++;
+bool FwGainDesign::apply_enabled(Axis axis) const
+{
+	switch (axis) {
+	case ROLL:
+		return _param_fw_gd_apply_r.get() != 0;
 
-	if (_speed_index >= _speed_count) {
-		_speed_index = 0;
+	case PITCH:
+		return _param_fw_gd_apply_p.get() != 0;
+
+	case YAW:
+		return _param_fw_gd_apply_y.get() != 0;
+
+	default:
+		return false;
+	}
+}
+
+bool FwGainDesign::capture_axis_baseline(Axis axis)
+{
+	const uint8_t index = static_cast<uint8_t>(axis);
+
+	if (_axis_overridden[index]) {
+		return true;
+	}
+
+	if (param_get(_rate_p_param[index], &_baseline_rate_p[index]) != PX4_OK
+	    || param_get(_rate_i_param[index], &_baseline_rate_i[index]) != PX4_OK
+	    || param_get(_rate_ff_param[index], &_baseline_rate_ff[index]) != PX4_OK) {
+		return false;
+	}
+
+	if (axis != YAW && param_get(_attitude_tc_param[index], &_baseline_attitude_tc[index]) != PX4_OK) {
+		return false;
+	}
+
+	_axis_overridden[index] = true;
+	return true;
+}
+
+bool FwGainDesign::apply_parameter(param_t parameter, float value, bool restore)
+{
+	if (parameter == PARAM_INVALID || !PX4_ISFINITE(value)) {
+		return false;
+	}
+
+	float current_value = NAN;
+
+	if (param_get(parameter, &current_value) != PX4_OK) {
+		return false;
+	}
+
+	const float tolerance = restore ? 1e-6f : fmaxf(1e-4f, 0.005f * fmaxf(fabsf(current_value), fabsf(value)));
+
+	if (PX4_ISFINITE(current_value) && fabsf(current_value - value) <= tolerance) {
+		return false;
+	}
+
+	return param_set_no_notification(parameter, &value) == PX4_OK;
+}
+
+bool FwGainDesign::apply_axis(Axis axis, const fw_gain_design_s &design)
+{
+	const uint8_t index = static_cast<uint8_t>(axis);
+
+	if (design.axis_status[index] != fw_gain_design_s::AXIS_STATUS_VALID
+	    || !capture_axis_baseline(axis)) {
+		return false;
+	}
+
+	bool changed = false;
+	changed |= apply_parameter(_rate_p_param[index], design.px4_rate_p[index], false);
+	changed |= apply_parameter(_rate_i_param[index], design.px4_rate_i[index], false);
+	changed |= apply_parameter(_rate_ff_param[index], design.px4_rate_ff[index], false);
+
+	if (axis != YAW) {
+		changed |= apply_parameter(_attitude_tc_param[index], design.attitude_tc[index], false);
+	}
+
+	return changed;
+}
+
+bool FwGainDesign::restore_axis(Axis axis)
+{
+	const uint8_t index = static_cast<uint8_t>(axis);
+
+	if (!_axis_overridden[index]) {
+		return false;
+	}
+
+	bool changed = false;
+	changed |= apply_parameter(_rate_p_param[index], _baseline_rate_p[index], true);
+	changed |= apply_parameter(_rate_i_param[index], _baseline_rate_i[index], true);
+	changed |= apply_parameter(_rate_ff_param[index], _baseline_rate_ff[index], true);
+
+	if (axis != YAW) {
+		changed |= apply_parameter(_attitude_tc_param[index], _baseline_attitude_tc[index], true);
+	}
+
+	_axis_overridden[index] = false;
+	return changed;
+}
+
+void FwGainDesign::restore_inactive_axes(bool armed)
+{
+	bool changed = false;
+
+	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+		const Axis gain_axis = static_cast<Axis>(axis);
+
+		if (_axis_overridden[axis] && (!armed || !apply_enabled(gain_axis))) {
+			changed |= restore_axis(gain_axis);
+		}
+	}
+
+	if (changed) {
+		param_notify_changes();
+	}
+}
+
+void FwGainDesign::apply_live_gains()
+{
+	_actuator_armed_sub.update();
+	const bool armed = _actuator_armed_sub.get().armed;
+	restore_inactive_axes(armed);
+
+	const bool any_apply_enabled = apply_enabled(ROLL) || apply_enabled(PITCH) || apply_enabled(YAW);
+
+	if (!armed || !any_apply_enabled) {
+		return;
+	}
+
+	const hrt_abstime now = hrt_absolute_time();
+
+	if (_last_gain_apply != 0 && now - _last_gain_apply < 500_ms) {
+		return;
+	}
+
+	_last_gain_apply = now;
+	_airspeed_validated_sub.update();
+	const airspeed_validated_s &airspeed = _airspeed_validated_sub.get();
+	const bool airspeed_valid = PX4_ISFINITE(airspeed.true_airspeed_m_s)
+				     && hrt_elapsed_time(&airspeed.timestamp) < 1_s;
+	const float vmin = _param_fw_gd_vmin.get();
+	const float vmax = _param_fw_gd_vmax.get();
+
+	if (!airspeed_valid || !PX4_ISFINITE(vmin) || !PX4_ISFINITE(vmax)
+	    || airspeed.true_airspeed_m_s < vmin || airspeed.true_airspeed_m_s > vmax) {
+		bool changed = false;
+
+		for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+			changed |= restore_axis(static_cast<Axis>(axis));
+		}
+
+		if (changed) {
+			param_notify_changes();
+		}
+
+		return;
+	}
+
+	fw_gain_design_s design{};
+	calculate_design(airspeed.true_airspeed_m_s, design);
+	bool changed = false;
+
+	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+		const Axis gain_axis = static_cast<Axis>(axis);
+		const bool attitude_design_valid = gain_axis == YAW || PX4_ISFINITE(design.attitude_tc[axis]);
+
+		if (apply_enabled(gain_axis)) {
+			if (design.axis_status[axis] == fw_gain_design_s::AXIS_STATUS_VALID && attitude_design_valid) {
+				changed |= apply_axis(gain_axis, design);
+
+			} else {
+				changed |= restore_axis(gain_axis);
+			}
+		}
+	}
+
+	if (changed) {
+		param_notify_changes();
 	}
 }
 
@@ -329,6 +544,7 @@ void FwGainDesign::Run()
 		reset_schedule();
 	}
 
+	apply_live_gains();
 	publish_next_design_point();
 }
 
@@ -362,8 +578,9 @@ int FwGainDesign::custom_command(int argc, char *argv[])
 int FwGainDesign::print_status()
 {
 	PX4_INFO("calculation id: %u, point %u/%u", (unsigned)_calculation_id,
-		 (unsigned)(_speed_index + 1U), (unsigned)_speed_count);
-	PX4_INFO("advisory only: does not write FW_* parameters");
+			 (unsigned)(_speed_index + 1U), (unsigned)_speed_count);
+	PX4_INFO("live apply: roll %s, pitch %s, yaw %s", apply_enabled(ROLL) ? "enabled" : "disabled",
+		 apply_enabled(PITCH) ? "enabled" : "disabled", apply_enabled(YAW) ? "enabled" : "disabled");
 	return PX4_OK;
 }
 
@@ -378,8 +595,9 @@ int FwGainDesign::print_usage(const char *reason)
 ### Description
 
 Calculates a speed-indexed fixed-wing rate and attitude gain design from a
-decoupled aerodynamic model. It only publishes `fw_gain_design`; it never
-changes flight-controller gains or sends a control command.
+decoupled aerodynamic model. It always publishes `fw_gain_design`. The
+optional per-axis live-apply switches use fresh true airspeed only while
+armed, and restore the prior parameters when disarmed or disabled.
 )DESCR_STR");
 
 	PRINT_MODULE_USAGE_NAME("fw_gain_design", "controller");

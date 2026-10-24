@@ -296,6 +296,8 @@ PARAM_DEFINE_FLOAT(FW_GD_P_MAX, 0.0f);
  * Yaw control travel
  *
  * Physical deflection produced by a normalized positive yaw-axis command.
+ * Set to zero on a rudderless aircraft; this marks only the yaw result as
+ * having no control authority and does not prevent roll or pitch calculations.
  *
  * @unit rad
  * @min 0.0
@@ -414,3 +416,47 @@ PARAM_DEFINE_FLOAT(FW_GD_R_ABWR, 0.25f);
  * @group FW Gain Design Attitude
  */
 PARAM_DEFINE_FLOAT(FW_GD_P_ABWR, 0.25f);
+
+/**
+ * Apply roll gains from airspeed
+ *
+ * When enabled and the aircraft is armed, apply the designed roll rate P, I,
+ * and feed-forward gains, plus the roll attitude time constant, from fresh
+ * true airspeed. This only operates between FW_GD_VMIN and FW_GD_VMAX.
+ * The original values are restored when disarmed or when this option is
+ * disabled. Disabled by default.
+ *
+ * @boolean
+ * @group FW Gain Design Apply
+ */
+PARAM_DEFINE_INT32(FW_GD_APPLY_R, 0);
+
+/**
+ * Apply pitch gains from airspeed
+ *
+ * When enabled and the aircraft is armed, apply the designed pitch rate P, I,
+ * and feed-forward gains, plus the pitch attitude time constant, from fresh
+ * true airspeed. This only operates between FW_GD_VMIN and FW_GD_VMAX.
+ * The original values are restored when disarmed or when this option is
+ * disabled. Disabled by default.
+ *
+ * @boolean
+ * @group FW Gain Design Apply
+ */
+PARAM_DEFINE_INT32(FW_GD_APPLY_P, 0);
+
+/**
+ * Apply yaw gains from airspeed
+ *
+ * When enabled and the aircraft is armed, apply the designed yaw rate P, I,
+ * and feed-forward gains from fresh true airspeed. This only operates between
+ * FW_GD_VMIN and FW_GD_VMAX. The original values are restored when disarmed
+ * or when this option is disabled. Disabled by default.
+ *
+ * Do not enable on an aircraft using FW_YAW_DAMP_EN: yaw-rate parameters are
+ * intentionally inactive while the aileron yaw damper owns yaw damping.
+ *
+ * @boolean
+ * @group FW Gain Design Apply
+ */
+PARAM_DEFINE_INT32(FW_GD_APPLY_Y, 0);

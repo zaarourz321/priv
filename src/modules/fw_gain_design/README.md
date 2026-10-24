@@ -1,10 +1,26 @@
 # Fixed-wing aerodynamic gain design
 
-`fw_gain_design` is deliberately an advisory calculation module. It does not
-subscribe to a flight-control setpoint, does not publish a torque or actuator
-setpoint, and never calls `param_set` or commits a controller parameter. Start
-it with `fw_gain_design start`; it then publishes one `fw_gain_design` sample
-every 100 ms and cycles continuously through the configured speed schedule.
+`fw_gain_design` is an advisory calculation module by default. Start it with
+`fw_gain_design start`; it then publishes one `fw_gain_design` sample every
+100 ms and cycles continuously through the configured speed schedule. It never
+publishes a torque or actuator setpoint.
+
+## Optional live application
+
+`FW_GD_APPLY_R`, `FW_GD_APPLY_P`, and `FW_GD_APPLY_Y` independently enable
+live roll, pitch, and yaw scheduling. All default to disabled. An enabled axis
+uses only a fresh `airspeed_validated.true_airspeed_m_s` sample while the
+vehicle is armed and the airspeed remains inside `FW_GD_VMIN` through
+`FW_GD_VMAX`.
+
+The roll and pitch switches update their respective `FW_RR_*` / `FW_PR_*`
+rate gains and `FW_R_TC` / `FW_P_TC`; yaw updates `FW_YR_*`. Updates are
+batched, rate-limited, and only sent when a calculated gain changes
+meaningfully. The module captures the prior values when it first takes over an
+axis and restores them when that axis is disabled, true airspeed becomes
+unavailable or leaves the design range, the vehicle disarms, or the module is
+stopped. Do not enable yaw application with `FW_YAW_DAMP_EN`, because the
+aileron yaw damper intentionally disables the yaw-rate loop.
 
 ## Model and required inputs
 

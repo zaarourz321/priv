@@ -65,9 +65,10 @@ PARAM_DEFINE_FLOAT(SENS_BARO_RATE, 20.0f);
  *
  * @value 0 Disabled
  * @value 1 GPS MSL
- * @value 2 Ground zero (QFE/AGL)
+ * @value 2 Ground zero (QFE/AGL, 15 s)
+ * @value 3 Ground zero fast (QFE/AGL, 5 s)
  * @min 0
- * @max 2
+ * @max 3
  * @group Barometer QNH Calibration
  */
 PARAM_DEFINE_INT32(BQNH_MODE, 0);

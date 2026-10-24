@@ -57,11 +57,10 @@ static constexpr float QNH_MIN_CHANGE_HPA{0.1f};
 static constexpr float QNH_FILTER_ALPHA{1.f / 30.f};
 static constexpr float QNH_MAX_STEP_HPA{0.5f};
 static constexpr hrt_abstime QNH_SAMPLE_INTERVAL_US{1_s};
-static constexpr hrt_abstime QNH_WRITE_INTERVAL_US{15_s};
 static constexpr hrt_abstime QNH_INPUT_TIMEOUT_US{2_s};
 static constexpr uint8_t QNH_MIN_SATELLITES{6};
-static constexpr uint16_t QNH_MIN_VALID_SAMPLES{15};
 static constexpr int32_t QNH_MODE_GROUND_ZERO{2};
+static constexpr int32_t QNH_MODE_GROUND_ZERO_FAST{3};
 
 VehicleAirData::VehicleAirData() :
 	ModuleParams(nullptr),
@@ -325,7 +324,8 @@ void VehicleAirData::Run()
 void VehicleAirData::UpdateQnhCalibration(const vehicle_air_data_s &air_data, const hrt_abstime &time_now_us)
 {
 	const int32_t qnh_mode = _param_bqnh_mode.get();
-	const bool ground_zero_mode = qnh_mode == QNH_MODE_GROUND_ZERO;
+	const bool ground_zero_mode = qnh_mode >= QNH_MODE_GROUND_ZERO;
+	const uint16_t settle_samples = qnh_mode == QNH_MODE_GROUND_ZERO_FAST ? 5 : 15;
 	const bool enabled = qnh_mode > 0;
 	const bool armed = _actuator_armed_valid && _actuator_armed.armed;
 
@@ -385,14 +385,14 @@ void VehicleAirData::UpdateQnhCalibration(const vehicle_air_data_s &air_data, co
 		_qnh_estimate_hpa = PX4_ISFINITE(_qnh_estimate_hpa) ?
 					    _qnh_estimate_hpa + QNH_FILTER_ALPHA * (qnh_estimate_hpa - _qnh_estimate_hpa) : qnh_estimate_hpa;
 
-		if (_qnh_valid_sample_count < QNH_MIN_VALID_SAMPLES) {
+		if (_qnh_valid_sample_count < settle_samples) {
 			_qnh_valid_sample_count++;
 		}
 
 		const float qnh_error_hpa = _qnh_estimate_hpa - current_qnh_hpa;
 
-		if (_qnh_valid_sample_count >= QNH_MIN_VALID_SAMPLES
-		    && (_qnh_last_parameter_write == 0 || time_now_us - _qnh_last_parameter_write >= QNH_WRITE_INTERVAL_US)
+		if (_qnh_valid_sample_count >= settle_samples
+		    && (_qnh_last_parameter_write == 0 || time_now_us - _qnh_last_parameter_write >= settle_samples * 1_s)
 		    && fabsf(qnh_error_hpa) >= QNH_MIN_CHANGE_HPA) {
 			if (_actuator_armed_sub.update(&_actuator_armed)) {
 				_actuator_armed_valid = true;
