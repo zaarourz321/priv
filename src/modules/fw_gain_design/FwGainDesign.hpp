@@ -96,10 +96,11 @@ private:
 	void calculate_design(float true_airspeed, fw_gain_design_s &design) const;
 	void update_flight_test();
 	void reset_estimator(Axis axis);
-	void update_estimator(Axis axis, float rate, float torque, float angle_of_attack, float true_airspeed, float dt);
+	void update_estimator(Axis axis, float rate, float cross_rate, float torque, float angle_of_attack, float sideslip,
+			      float true_airspeed, float dt);
 	void finalize_estimate(Axis axis);
 	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
-	bool estimate_angle_of_attack(float &angle_of_attack) const;
+	bool estimate_airflow_angles(float &angle_of_attack, float &sideslip) const;
 	bool model_source_is_estimated(Axis axis) const;
 	bool estimate_valid(Axis axis) const;
 	bool request_excitation(Axis axis);
@@ -115,36 +116,52 @@ private:
 	uint8_t validate_common_inputs() const;
 
 	static constexpr uint8_t kTorqueHistoryLength = 20;
+	static constexpr uint8_t kMaxModelOrder = 5;
 	static constexpr uint32_t kEstimatorWarmupSamples = 100;
 
 	struct RateEstimator {
 		// Regular axes use rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
-		// The optional pitch short-period model uses q[k] = A_alpha * alpha[k-1]
-		// + A_q * q[k-1] + B * command[k-delay] + offset. Identifying rate
-		// directly avoids differentiating a noisy gyro signal.
-		float theta[4] {}; // Regular: A, B, offset. Pitch: A_alpha, A_q, B, offset.
-		float covariance[4][4] {};
+		// Pitch uses the alpha/q short-period state and the lateral model uses
+		// beta/p/r. The target rate is still fitted directly, avoiding noisy raw
+		// angular acceleration. A second fit models alpha or beta evolution.
+		float theta[kMaxModelOrder] {};
+		float covariance[kMaxModelOrder][kMaxModelOrder] {};
+		float airflow_theta[kMaxModelOrder] {};
+		float airflow_covariance[kMaxModelOrder][kMaxModelOrder] {};
 		float residual_sum_sq{0.f};
 		float output_sum_sq{0.f};
 		float output_sum{0.f};
+		float airflow_residual_sum_sq{0.f};
+		float airflow_output_sum_sq{0.f};
+		float airflow_output_sum{0.f};
 		float command_sum{0.f};
 		float command_sum_sq{0.f};
 		float airspeed_sum{0.f};
 		float angle_of_attack_sum{0.f};
+		float sideslip_sum{0.f};
 		float dt_sum{0.f};
 		float filtered_rate{NAN};
 		float previous_filtered_rate{NAN};
+		float filtered_cross_rate{NAN};
+		float previous_filtered_cross_rate{NAN};
 		float filtered_angle_of_attack{NAN};
 		float previous_filtered_angle_of_attack{NAN};
+		float filtered_sideslip{NAN};
+		float previous_filtered_sideslip{NAN};
 		float filtered_torque{NAN};
 		float torque_history[kTorqueHistoryLength] {};
 		uint32_t sample_count{0};
 		uint32_t fit_sample_count{0};
 		uint8_t torque_history_index{0};
 		bool pitch_short_period{false};
+		bool lateral_coupled{false};
 		bool filters_initialized{false};
 		bool initialized{false};
 	};
+
+	static bool update_rls(float theta[kMaxModelOrder], float covariance[kMaxModelOrder][kMaxModelOrder],
+			       const float phi[kMaxModelOrder], uint8_t model_order, float output,
+			       float forgetting_factor, float &fitted_output);
 
 	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 	uORB::SubscriptionData<airspeed_validated_s> _airspeed_validated_sub{ORB_ID(airspeed_validated)};
@@ -173,6 +190,13 @@ private:
 	float _identified_rate_a[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_rate_b[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_airspeed[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_static_derivative[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_cross_rate_derivative[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_airflow_angle[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_airflow_rate_a[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_airflow_rate_b[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_airflow_control_b[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identification_airflow_fit[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_pitch_cm_alpha{NAN};
 	float _identified_pitch_angle_of_attack{NAN};
 	bool _identified_valid[AXIS_COUNT] {};
@@ -250,6 +274,7 @@ private:
 		(ParamFloat<px4::params::FW_GD_EST_FC>) _param_fw_gd_est_fc,
 		(ParamFloat<px4::params::FW_GD_EST_DLY>) _param_fw_gd_est_dly,
 		(ParamInt<px4::params::FW_GD_P_SP_EN>) _param_fw_gd_p_sp_en,
+		(ParamInt<px4::params::FW_GD_LAT_EN>) _param_fw_gd_lat_en,
 		(ParamInt<px4::params::FW_GD_EST_MIN>) _param_fw_gd_est_min,
 		(ParamInt<px4::params::FW_GD_APPLY_R>) _param_fw_gd_apply_r,
 		(ParamInt<px4::params::FW_GD_APPLY_P>) _param_fw_gd_apply_p,

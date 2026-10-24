@@ -594,6 +594,22 @@ PARAM_DEFINE_FLOAT(FW_GD_EST_DLY, 0.06f);
 PARAM_DEFINE_INT32(FW_GD_P_SP_EN, 1);
 
 /**
+ * Use coupled lateral-directional identification
+ *
+ * When enabled, roll and yaw tests estimate their body-rate model with
+ * measured sideslip and the other lateral body rate as states. Roll therefore
+ * identifies Cl_beta and Cl_r alongside Cl_p and aileron effectiveness; yaw
+ * identifies Cn_beta and Cn_p alongside Cn_r and yaw-control effectiveness.
+ * Sideslip is reconstructed from air-relative velocity and requires fresh
+ * local velocity plus attitude. Disable only to use the earlier one-state
+ * rate model for roll and yaw.
+ *
+ * @boolean
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_INT32(FW_GD_LAT_EN, 1);
+
+/**
  * Minimum identification samples
  *
  * A completed test needs at least this many accepted samples before its

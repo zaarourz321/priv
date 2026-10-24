@@ -40,10 +40,14 @@ falling back silently to manual values.
 
 ## Flight-test excitation and identification
 
-The module identifies the decoupled rate plant used by this gain designer:
+The module identifies the rate plant used by this gain designer. With the
+coupled models enabled by default, it measures the relevant airflow state and
+cross-axis rate rather than assuming they are zero:
 
 ```
-rate_dot = a * rate + b * normalized_torque_command + bias
+q_dot = M_alpha * alpha + M_q * q + M_delta * u_pitch + bias
+p_dot = L_beta * beta + L_p * p + L_r * r + L_delta * u_roll + bias
+r_dot = N_beta * beta + N_r * r + N_p * p + N_delta * u_yaw + bias
 ```
 
 During a test it adds one small, zero-mean sine **body-rate setpoint** to the
@@ -76,29 +80,41 @@ physical travel parameter for that axis. Therefore area, reference dimensions,
 inertia, density, and surface travel must be correct even when using flight
 identification.
 
-### Pitch short-period model
+### Coupled pitch short-period model
 
 With `FW_GD_P_SP_EN=1` (the default), the pitch estimator does not treat the
 airframe as a one-state `q` model. It reconstructs angle of attack from
 air-relative NED velocity, the EKF wind estimate when available, and vehicle
-attitude, then estimates:
+attitude, then estimates both state equations:
 
 ```
 q[k] = A_alpha * alpha[k-1] + A_q * q[k-1] + B * command[k-delay] + bias
+alpha[k] = Z_alpha * alpha[k-1] + Z_q * q[k-1] + Z_delta * command[k-delay] + bias
 ```
 
-This separates the `Cm_alpha` contribution from `Cmq`; it publishes the mean
-identified alpha and `identified_pitch_cm_alpha` for review. Fresh local
+This separates the `Cm_alpha` contribution from `Cmq` and gives an independent
+alpha-state fit. It publishes the mean identified alpha,
+`identified_pitch_cm_alpha`, and alpha-state dynamics for review. Fresh local
 velocity and attitude are required for a pitch test. In HIL without a wind
 topic, the estimator explicitly falls back to zero wind. That is appropriate
 only when the simulated wind is zero. In real flight, a valid wind estimate is
 needed for an accurate physical angle of attack.
 
-Only the damping and control derivatives used by this module are identifiable
-with these isolated SISO tests. It does **not** estimate static derivatives
-such as `Cm_alpha`, nor cross-axis/Dutch-roll/short-period terms such as
-`Cn_beta`, `Cl_r`, or `Cm_alpha`. Do not interpret the output as a full 6-DOF
-aerodynamic model.
+### Coupled roll/yaw lateral-directional model
+
+With `FW_GD_LAT_EN=1` (the default), roll and yaw tests reconstruct sideslip
+from the same air-relative velocity used by pitch. A roll test fits
+`beta/p/r`, exposing `Cl_beta`, `Cl_p`, `Cl_r`, and roll-control effectiveness.
+A yaw test similarly exposes `Cn_beta`, `Cn_r`, `Cn_p`, and yaw-control
+effectiveness. It also fits the beta-state equation and publishes its
+normalized residual. The gain calculator continues to use only validated
+own-axis damping and control effectiveness; the additional terms are
+diagnostic and are never automatically applied.
+
+This is a compact linear small-disturbance model, not a full 6-DOF aircraft
+identifier. It does not identify translational force coefficients or the full
+inertia tensor. It does prevent steady sideslip and roll-yaw coupling from
+being falsely attributed entirely to `Cl_p`, `Cn_r`, or control effectiveness.
 
 ### Safe test sequence
 
@@ -128,9 +144,13 @@ aerodynamic model.
     `excitation_state = COMPLETE`, a non-zero `identification_sample_count`,
     `identification_valid[axis] = true`, negative identified damping, positive
     identified control derivative, and a small `identification_fit` (normalized
-    RMS residual; lower is better). For pitch short-period tests, also check
-    `identified_pitch_short_period = true` and the reported mean alpha. If it
-    is rejected, inspect
+    RMS residual; lower is better). Also inspect
+    `identification_airflow_fit`, which grades the alpha or beta state model.
+    For pitch, check `identified_pitch_short_period = true` and the reported
+    mean alpha. For roll/yaw, check `identified_coupled_model[axis] = true`,
+    the reported `identified_airflow_angle` (mean beta),
+    `identified_static_derivative`, and `identified_cross_rate_derivative`.
+    If a result is rejected, inspect
     `identification_reject_reason[axis]` and the published candidate values;
     candidates are diagnostic only until `identification_valid` is true.
 5. Set only the tested axis' source to `1`. Review the generated gains. To
@@ -157,8 +177,9 @@ enabled.
 
 ## Model and required inputs
 
-The module uses independent linear rate models. For roll (the pitch and yaw
-forms substitute `c, Iyy, Cm_q, Cm_du` and `b, Izz, Cn_r, Cn_du` respectively):
+The gain calculation uses the validated diagonal rate model. For roll (the
+pitch and yaw forms substitute `c, Iyy, Cm_q, Cm_du` and `b, Izz, Cn_r,
+Cn_du` respectively):
 
 ```
 p_dot = a_p p + b_p u_roll
@@ -174,11 +195,12 @@ PX4 command `+1` after the mixer/control allocator. The signs therefore must
 be expressed in PX4 body-moment convention: a positive normalized command must
 produce a positive body-axis angular acceleration.
 
-The model is only valid in the linear region and treats roll, pitch, and yaw as
-decoupled. It will explicitly mark an axis invalid if its damping derivative is
-not stabilizing or its control effectiveness is not positive. It does not turn
-a coupled Dutch-roll, short-period, or rudderless aileron-yaw-damper model into
-a false SISO yaw model.
+The model is only valid in the linear region. Identification uses the coupled
+terms above by default, but the PI gain design deliberately applies the
+validated diagonal dynamics only. It will explicitly mark an axis invalid if
+its damping derivative is not stabilizing or its control effectiveness is not
+positive. It does not turn a rudderless aileron-yaw-damper aircraft into a
+controllable yaw-rate axis.
 
 ## Rate and attitude design
 
