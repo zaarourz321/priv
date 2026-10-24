@@ -46,6 +46,7 @@
 #include <cmath>
 
 #include <lib/parameters/param.h>
+#include <px4_platform_common/atomic.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/module_params.h>
 #include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
@@ -54,7 +55,13 @@
 #include <uORB/topics/actuator_armed.h>
 #include <uORB/topics/airspeed_validated.h>
 #include <uORB/topics/fw_gain_design.h>
+#include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/vehicle_angular_velocity.h>
+#include <uORB/topics/vehicle_control_mode.h>
+#include <uORB/topics/vehicle_land_detected.h>
+#include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/vehicle_torque_setpoint.h>
 
 using namespace time_literals;
 
@@ -83,6 +90,16 @@ private:
 	void reset_schedule();
 	void publish_next_design_point();
 	void calculate_design(float true_airspeed, fw_gain_design_s &design) const;
+	void update_flight_test();
+	void reset_estimator(Axis axis);
+	void update_estimator(Axis axis, float rate, float angular_acceleration, float torque, float true_airspeed, float dt);
+	void finalize_estimate(Axis axis);
+	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
+	bool model_source_is_estimated(Axis axis) const;
+	bool estimate_valid(Axis axis) const;
+	bool request_excitation(Axis axis);
+	void abort_excitation(uint8_t reason);
+	void fill_flight_test_status(fw_gain_design_s &design) const;
 	void apply_live_gains();
 	bool apply_axis(Axis axis, const fw_gain_design_s &design);
 	bool restore_axis(Axis axis);
@@ -92,9 +109,27 @@ private:
 	bool capture_axis_baseline(Axis axis);
 	uint8_t validate_common_inputs() const;
 
+	struct RateEstimator {
+		float theta[3] {}; // a, b, constant offset: rate_dot = a * rate + b * command + offset
+		float covariance[3][3] {};
+		float residual_sum_sq{0.f};
+		float output_sum_sq{0.f};
+		float command_sum{0.f};
+		float command_sum_sq{0.f};
+		float airspeed_sum{0.f};
+		uint32_t sample_count{0};
+		bool initialized{false};
+	};
+
 	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 	uORB::SubscriptionData<airspeed_validated_s> _airspeed_validated_sub{ORB_ID(airspeed_validated)};
 	uORB::SubscriptionData<actuator_armed_s> _actuator_armed_sub{ORB_ID(actuator_armed)};
+	uORB::SubscriptionData<vehicle_angular_velocity_s> _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
+	uORB::SubscriptionData<vehicle_torque_setpoint_s> _vehicle_torque_setpoint_sub{ORB_ID(vehicle_torque_setpoint)};
+	uORB::SubscriptionData<vehicle_status_s> _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::SubscriptionData<vehicle_control_mode_s> _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
+	uORB::SubscriptionData<vehicle_land_detected_s> _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
+	uORB::SubscriptionData<manual_control_setpoint_s> _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Publication<fw_gain_design_s> _gain_design_pub{ORB_ID(fw_gain_design)};
 
 	uint32_t _calculation_id{0};
@@ -102,6 +137,33 @@ private:
 	uint16_t _speed_count{0};
 	uint8_t _schedule_status{fw_gain_design_s::SCHEDULE_STATUS_INVALID_RANGE};
 	hrt_abstime _last_gain_apply{0};
+	hrt_abstime _last_estimator_sample{0};
+
+	RateEstimator _estimator[AXIS_COUNT] {};
+	float _identified_damping_derivative[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_control_derivative[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_rate_a[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_rate_b[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_airspeed[AXIS_COUNT] {NAN, NAN, NAN};
+	bool _identified_valid[AXIS_COUNT] {};
+
+	uint8_t _excitation_state{fw_gain_design_s::EXCITATION_STATE_IDLE};
+	uint8_t _excitation_abort_reason{fw_gain_design_s::EXCITATION_ABORT_NONE};
+	Axis _excitation_axis{ROLL};
+	bool _excitation_start_requested{false};
+	// Set by the shell command path and consumed by the work-queue thread.
+	// 1..3 request roll/pitch/yaw, 4 requests an immediate stop.
+	px4::atomic<uint8_t> _excitation_command{0};
+	float _excitation_amplitude{0.f};
+	float _excitation_frequency{0.f};
+	float _excitation_duration{0.f};
+	float _excitation_rate_sp{0.f};
+	hrt_abstime _excitation_start{0};
+
+	// The test uses existing attitude/rate control. It adds this bounded rate
+	// setpoint only while the state below is RUNNING; it never publishes a
+	// competing torque setpoint.
+	static constexpr float kExcitationRampTimeS = 2.f;
 
 	param_t _rate_p_param[AXIS_COUNT] {PARAM_INVALID, PARAM_INVALID, PARAM_INVALID};
 	param_t _rate_i_param[AXIS_COUNT] {PARAM_INVALID, PARAM_INVALID, PARAM_INVALID};
@@ -141,6 +203,16 @@ private:
 		(ParamFloat<px4::params::FW_GD_Y_ZETA>) _param_fw_gd_y_zeta,
 		(ParamFloat<px4::params::FW_GD_R_ABWR>) _param_fw_gd_r_abwr,
 		(ParamFloat<px4::params::FW_GD_P_ABWR>) _param_fw_gd_p_abwr,
+		(ParamInt<px4::params::FW_GD_R_SRC>) _param_fw_gd_r_src,
+		(ParamInt<px4::params::FW_GD_P_SRC>) _param_fw_gd_p_src,
+		(ParamInt<px4::params::FW_GD_Y_SRC>) _param_fw_gd_y_src,
+		(ParamInt<px4::params::FW_GD_EXC_AXIS>) _param_fw_gd_exc_axis,
+		(ParamFloat<px4::params::FW_GD_EXC_AMP>) _param_fw_gd_exc_amp,
+		(ParamFloat<px4::params::FW_GD_EXC_FREQ>) _param_fw_gd_exc_freq,
+		(ParamFloat<px4::params::FW_GD_EXC_TIME>) _param_fw_gd_exc_time,
+		(ParamFloat<px4::params::FW_GD_EXC_RMAX>) _param_fw_gd_exc_rmax,
+		(ParamFloat<px4::params::FW_GD_EST_TC>) _param_fw_gd_est_tc,
+		(ParamInt<px4::params::FW_GD_EST_MIN>) _param_fw_gd_est_min,
 		(ParamInt<px4::params::FW_GD_APPLY_R>) _param_fw_gd_apply_r,
 		(ParamInt<px4::params::FW_GD_APPLY_P>) _param_fw_gd_apply_p,
 		(ParamInt<px4::params::FW_GD_APPLY_Y>) _param_fw_gd_apply_y,
@@ -148,6 +220,7 @@ private:
 		// Existing PX4 settings used to report and, if explicitly enabled, apply
 		// directly comparable FW_* gains.
 		(ParamInt<px4::params::FW_ARSP_SCALE_EN>) _param_fw_arsp_scale_en,
-		(ParamFloat<px4::params::FW_AIRSPD_TRIM>) _param_fw_airspd_trim
+		(ParamFloat<px4::params::FW_AIRSPD_TRIM>) _param_fw_airspd_trim,
+		(ParamInt<px4::params::FW_YAW_DAMP_EN>) _param_fw_yaw_damp_en
 	)
 };

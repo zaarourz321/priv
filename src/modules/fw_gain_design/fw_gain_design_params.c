@@ -418,6 +418,146 @@ PARAM_DEFINE_FLOAT(FW_GD_R_ABWR, 0.25f);
 PARAM_DEFINE_FLOAT(FW_GD_P_ABWR, 0.25f);
 
 /**
+ * Roll model source
+ *
+ * Selects the roll model used by the gain calculation.
+ *
+ * @value 0 Manual: use FW_GD_CLP and FW_GD_CLDU
+ * @value 1 Flight estimate: use the most recent valid roll excitation result
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_INT32(FW_GD_R_SRC, 0);
+
+/**
+ * Pitch model source
+ *
+ * Selects the pitch model used by the gain calculation.
+ *
+ * @value 0 Manual: use FW_GD_CMQ and FW_GD_CMDU
+ * @value 1 Flight estimate: use the most recent valid pitch excitation result
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_INT32(FW_GD_P_SRC, 0);
+
+/**
+ * Yaw model source
+ *
+ * Selects the yaw model used by the gain calculation.
+ *
+ * @value 0 Manual: use FW_GD_CNR and FW_GD_CNDU
+ * @value 1 Flight estimate: use the most recent valid yaw excitation result
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_INT32(FW_GD_Y_SRC, 0);
+
+/**
+ * Flight-test excitation axis
+ *
+ * Selects the one axis that `fw_gain_design excite start` may test. An
+ * excitation is never started merely by changing this parameter. Test one
+ * axis at a time in level, stable flight.
+ *
+ * @value 0 Disabled
+ * @value 1 Roll
+ * @value 2 Pitch
+ * @value 3 Yaw
+ * @min 0
+ * @max 3
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_INT32(FW_GD_EXC_AXIS, 0);
+
+/**
+ * Flight-test rate-setpoint amplitude
+ *
+ * Peak amplitude of the zero-mean sine rate setpoint injected during an
+ * explicitly started test. Start small and increase only after reviewing a
+ * log. The module ramps this amplitude over two seconds.
+ *
+ * @unit deg/s
+ * @min 0.5
+ * @max 20.0
+ * @decimal 1
+ * @increment 0.5
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_EXC_AMP, 4.0f);
+
+/**
+ * Flight-test excitation frequency
+ *
+ * Sine-wave frequency used to persistently excite the selected rate axis.
+ * Keep it below the closed-loop rate bandwidth and above slow navigation
+ * corrections.
+ *
+ * @unit Hz
+ * @min 0.1
+ * @max 3.0
+ * @decimal 2
+ * @increment 0.05
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_EXC_FREQ, 0.7f);
+
+/**
+ * Flight-test excitation duration
+ *
+ * Length of an explicitly started excitation. The command is removed on
+ * completion, on any safety abort, and when `fw_gain_design excite stop` is
+ * issued.
+ *
+ * @unit s
+ * @min 8.0
+ * @max 90.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_EXC_TIME, 30.0f);
+
+/**
+ * Flight-test rate safety limit
+ *
+ * Abort the test if the measured selected-axis body rate exceeds this value.
+ * This is a safety limit, not the normal test amplitude.
+ *
+ * @unit deg/s
+ * @min 5.0
+ * @max 180.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_EXC_RMAX, 45.0f);
+
+/**
+ * Identification forgetting time constant
+ *
+ * Recursive least-squares memory used during a flight test. A longer value
+ * gives a quieter estimate but needs more excitation data.
+ *
+ * @unit s
+ * @min 2.0
+ * @max 120.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_EST_TC, 20.0f);
+
+/**
+ * Minimum identification samples
+ *
+ * A completed test needs at least this many accepted samples before its
+ * estimated derivatives can be used as a model source.
+ *
+ * @min 100
+ * @max 4000
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_INT32(FW_GD_EST_MIN, 500);
+
+/**
  * Apply roll gains from airspeed
  *
  * When enabled and the aircraft is armed, apply the designed roll rate P, I,

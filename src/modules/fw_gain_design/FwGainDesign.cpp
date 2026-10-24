@@ -37,6 +37,7 @@
 #include "FwGainDesign.hpp"
 
 #include <cmath>
+#include <cstring>
 
 #include <drivers/drv_hrt.h>
 #include <mathlib/mathlib.h>
@@ -77,8 +78,9 @@ FwGainDesign::~FwGainDesign()
 bool FwGainDesign::init()
 {
 	// The published design is always advisory until one of the explicit axis
-	// apply switches is enabled.
-	ScheduleOnInterval(100_ms);
+	// apply switches is enabled. A 50 Hz publication also gives the optional
+	// flight-test rate-setpoint injection a bounded, regular update interval.
+	ScheduleOnInterval(20_ms);
 	return true;
 }
 
@@ -125,6 +127,28 @@ void FwGainDesign::reset_schedule()
 	_schedule_status = fw_gain_design_s::SCHEDULE_STATUS_VALID;
 }
 
+bool FwGainDesign::model_source_is_estimated(Axis axis) const
+{
+	switch (axis) {
+	case ROLL:
+		return _param_fw_gd_r_src.get() == fw_gain_design_s::MODEL_SOURCE_FLIGHT_TEST;
+
+	case PITCH:
+		return _param_fw_gd_p_src.get() == fw_gain_design_s::MODEL_SOURCE_FLIGHT_TEST;
+
+	case YAW:
+		return _param_fw_gd_y_src.get() == fw_gain_design_s::MODEL_SOURCE_FLIGHT_TEST;
+
+	default:
+		return false;
+	}
+}
+
+bool FwGainDesign::estimate_valid(Axis axis) const
+{
+	return _identified_valid[static_cast<uint8_t>(axis)];
+}
+
 void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &design) const
 {
 	design.airspeed = true_airspeed;
@@ -162,10 +186,10 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 		const float bref = _param_fw_gd_bref.get();
 		const float cref = _param_fw_gd_cref.get();
 
-		const float damping_coefficient[AXIS_COUNT] = {
+		float damping_coefficient[AXIS_COUNT] = {
 			_param_fw_gd_clp.get(), _param_fw_gd_cmq.get(), _param_fw_gd_cnr.get()
 		};
-		const float control_coefficient[AXIS_COUNT] = {
+		float control_coefficient[AXIS_COUNT] = {
 			_param_fw_gd_cldu.get(), _param_fw_gd_cmdu.get(), _param_fw_gd_cndu.get()
 		};
 		const float control_range[AXIS_COUNT] = {
@@ -182,6 +206,23 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 			_param_fw_gd_r_zeta.get(), _param_fw_gd_p_zeta.get(), _param_fw_gd_y_zeta.get()
 		};
 
+		for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+			const Axis model_axis = static_cast<Axis>(axis);
+
+			if (model_source_is_estimated(model_axis)) {
+				if (estimate_valid(model_axis)) {
+					damping_coefficient[axis] = _identified_damping_derivative[axis];
+					control_coefficient[axis] = _identified_control_derivative[axis];
+
+				} else {
+					// An estimate is deliberately volatile: it must never silently
+					// fall back to a stale manual model when this source is selected.
+					damping_coefficient[axis] = NAN;
+					control_coefficient[axis] = NAN;
+				}
+			}
+		}
+
 		// The aerodynamic model uses true airspeed and local density. PX4's
 		// airspeed scaler uses calibrated/equivalent airspeed, referenced to the
 		// ISA sea-level density. Publish that conversion so the two gain forms
@@ -192,7 +233,9 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 			const float length = reference_length[axis];
 
 			if (!PX4_ISFINITE(damping_coefficient[axis]) || !PX4_ISFINITE(control_coefficient[axis])
-			    || !PX4_ISFINITE(bandwidth_ratio[axis]) || !PX4_ISFINITE(damping_ratio[axis])) {
+			    || !PX4_ISFINITE(bandwidth_ratio[axis]) || !PX4_ISFINITE(damping_ratio[axis])
+			    || !PX4_ISFINITE(length) || !PX4_ISFINITE(control_range[axis]) || !PX4_ISFINITE(inertia[axis])
+			    || length <= 0.f || control_range[axis] <= 0.f || inertia[axis] <= 0.f) {
 				design.axis_status[axis] = fw_gain_design_s::AXIS_STATUS_INVALID_INPUT;
 				continue;
 			}
@@ -316,6 +359,372 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 	}
 }
 
+void FwGainDesign::reset_estimator(Axis axis)
+{
+	RateEstimator &estimator = _estimator[static_cast<uint8_t>(axis)];
+	estimator = {};
+
+	// Large diagonal covariance permits convergence from no a-priori estimate,
+	// while retaining a well-conditioned 3-parameter (a, b, offset) RLS model.
+	for (uint8_t i = 0; i < 3; ++i) {
+		estimator.covariance[i][i] = 1e3f;
+	}
+
+	estimator.initialized = true;
+	_identified_valid[static_cast<uint8_t>(axis)] = false;
+	_identified_damping_derivative[static_cast<uint8_t>(axis)] = NAN;
+	_identified_control_derivative[static_cast<uint8_t>(axis)] = NAN;
+	_identified_rate_a[static_cast<uint8_t>(axis)] = NAN;
+	_identified_rate_b[static_cast<uint8_t>(axis)] = NAN;
+	_identified_airspeed[static_cast<uint8_t>(axis)] = NAN;
+	_last_estimator_sample = 0;
+}
+
+void FwGainDesign::update_estimator(Axis axis, float rate, float angular_acceleration, float torque,
+		float true_airspeed, float dt)
+{
+	const uint8_t axis_index = static_cast<uint8_t>(axis);
+	RateEstimator &estimator = _estimator[axis_index];
+
+	if (!estimator.initialized || !PX4_ISFINITE(rate) || !PX4_ISFINITE(angular_acceleration)
+	    || !PX4_ISFINITE(torque) || !PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f
+	    || !PX4_ISFINITE(dt) || dt <= 0.f) {
+		return;
+	}
+
+	const float time_constant = _param_fw_gd_est_tc.get();
+
+	if (!PX4_ISFINITE(time_constant) || time_constant <= dt) {
+		return;
+	}
+
+	// The offset makes trim torque and slow navigation corrections harmless.
+	// The plant terms remain exactly rate_dot = a * rate + b * command.
+	const float phi[3] = {rate, torque, 1.f};
+	float covariance_phi[3] {};
+
+	for (uint8_t i = 0; i < 3; ++i) {
+		for (uint8_t j = 0; j < 3; ++j) {
+			covariance_phi[i] += estimator.covariance[i][j] * phi[j];
+		}
+	}
+
+	const float forgetting_factor = math::constrain(1.f - dt / time_constant, 0.95f, 0.9999f);
+	float denominator = forgetting_factor;
+
+	for (uint8_t i = 0; i < 3; ++i) {
+		denominator += phi[i] * covariance_phi[i];
+	}
+
+	if (!PX4_ISFINITE(denominator) || denominator <= FLT_EPSILON) {
+		return;
+	}
+
+	float predicted_acceleration = 0.f;
+
+	for (uint8_t i = 0; i < 3; ++i) {
+		predicted_acceleration += phi[i] * estimator.theta[i];
+	}
+
+	const float innovation = angular_acceleration - predicted_acceleration;
+
+	for (uint8_t i = 0; i < 3; ++i) {
+		estimator.theta[i] += covariance_phi[i] * innovation / denominator;
+	}
+
+	for (uint8_t i = 0; i < 3; ++i) {
+		for (uint8_t j = 0; j < 3; ++j) {
+			estimator.covariance[i][j] = (estimator.covariance[i][j]
+							      - covariance_phi[i] * covariance_phi[j] / denominator) / forgetting_factor;
+		}
+	}
+
+	// Keep round-off from breaking the symmetry expected by the next update.
+	for (uint8_t i = 0; i < 3; ++i) {
+		for (uint8_t j = i + 1; j < 3; ++j) {
+			const float symmetric_value = 0.5f * (estimator.covariance[i][j] + estimator.covariance[j][i]);
+			estimator.covariance[i][j] = symmetric_value;
+			estimator.covariance[j][i] = symmetric_value;
+		}
+	}
+
+	estimator.residual_sum_sq += innovation * innovation;
+	estimator.output_sum_sq += angular_acceleration * angular_acceleration;
+	estimator.command_sum += torque;
+	estimator.command_sum_sq += torque * torque;
+	estimator.airspeed_sum += true_airspeed;
+	estimator.sample_count++;
+}
+
+void FwGainDesign::finalize_estimate(Axis axis)
+{
+	const uint8_t axis_index = static_cast<uint8_t>(axis);
+	const RateEstimator &estimator = _estimator[axis_index];
+	const float min_samples = static_cast<float>(_param_fw_gd_est_min.get());
+
+	if (!estimator.initialized || estimator.sample_count < min_samples || estimator.sample_count == 0) {
+		return;
+	}
+
+	const float rho = _param_fw_gd_rho.get();
+	const float sref = _param_fw_gd_sref.get();
+	const float reference_length[AXIS_COUNT] = {
+		_param_fw_gd_bref.get(), _param_fw_gd_cref.get(), _param_fw_gd_bref.get()
+	};
+	const float inertia[AXIS_COUNT] = {
+		_param_fw_gd_ix.get(), _param_fw_gd_iy.get(), _param_fw_gd_iz.get()
+	};
+	const float control_range[AXIS_COUNT] = {
+		_param_fw_gd_r_max.get(), _param_fw_gd_p_max.get(), _param_fw_gd_y_max.get()
+	};
+	const float airspeed = estimator.airspeed_sum / estimator.sample_count;
+	const float rate_a = estimator.theta[0];
+	const float rate_b = estimator.theta[1];
+	const float length = reference_length[axis_index];
+	const float command_mean = estimator.command_sum / estimator.sample_count;
+	const float command_variance = estimator.command_sum_sq / estimator.sample_count - command_mean * command_mean;
+	const float fit_denominator = sqrtf(estimator.output_sum_sq / estimator.sample_count);
+	const float fit = sqrtf(estimator.residual_sum_sq / estimator.sample_count) / fmaxf(fit_denominator, 0.01f);
+
+	if (!PX4_ISFINITE(rho) || !PX4_ISFINITE(sref) || !PX4_ISFINITE(length) || !PX4_ISFINITE(inertia[axis_index])
+	    || !PX4_ISFINITE(control_range[axis_index]) || !PX4_ISFINITE(airspeed) || !PX4_ISFINITE(rate_a)
+	    || !PX4_ISFINITE(rate_b) || !PX4_ISFINITE(fit) || rho <= 0.f || sref <= 0.f || length <= 0.f
+	    || inertia[axis_index] <= 0.f || control_range[axis_index] <= 0.f || airspeed <= 0.f
+	    || rate_a >= -0.02f || rate_b <= 0.f || command_variance < 1e-4f || fit > 0.5f) {
+		return;
+	}
+
+	const float damping_derivative = 4.f * inertia[axis_index] * rate_a
+						 / (rho * airspeed * sref * length * length);
+	const float control_derivative = 2.f * inertia[axis_index] * rate_b
+						 / (rho * airspeed * airspeed * sref * length * control_range[axis_index]);
+
+	if (!PX4_ISFINITE(damping_derivative) || !PX4_ISFINITE(control_derivative)
+	    || damping_derivative >= 0.f || control_derivative <= 0.f) {
+		return;
+	}
+
+	_identified_rate_a[axis_index] = rate_a;
+	_identified_rate_b[axis_index] = rate_b;
+	_identified_airspeed[axis_index] = airspeed;
+	_identified_damping_derivative[axis_index] = damping_derivative;
+	_identified_control_derivative[axis_index] = control_derivative;
+	_identified_valid[axis_index] = true;
+}
+
+bool FwGainDesign::flight_test_conditions_met(Axis axis, float &true_airspeed) const
+{
+	true_airspeed = _airspeed_validated_sub.get().true_airspeed_m_s;
+	const vehicle_status_s &vehicle_status = _vehicle_status_sub.get();
+	const vehicle_control_mode_s &control_mode = _vehicle_control_mode_sub.get();
+	const vehicle_land_detected_s &land_detected = _vehicle_land_detected_sub.get();
+	const actuator_armed_s &armed = _actuator_armed_sub.get();
+
+	if (!armed.armed || vehicle_status.vehicle_type != vehicle_status_s::VEHICLE_TYPE_FIXED_WING
+	    || vehicle_status.is_vtol || vehicle_status.in_transition_mode || vehicle_status.failsafe
+	    || land_detected.landed || !control_mode.flag_control_rates_enabled
+	    || !control_mode.flag_control_attitude_enabled || control_mode.flag_control_termination_enabled) {
+		return false;
+	}
+
+	if (axis == YAW && _param_fw_yaw_damp_en.get() != 0) {
+		return false;
+	}
+
+	const float vmin = _param_fw_gd_vmin.get();
+	const float vmax = _param_fw_gd_vmax.get();
+	const airspeed_validated_s &airspeed = _airspeed_validated_sub.get();
+	const vehicle_angular_velocity_s &angular_velocity = _vehicle_angular_velocity_sub.get();
+	const vehicle_torque_setpoint_s &torque_setpoint = _vehicle_torque_setpoint_sub.get();
+
+	return PX4_ISFINITE(true_airspeed) && PX4_ISFINITE(vmin) && PX4_ISFINITE(vmax)
+	       && hrt_elapsed_time(&airspeed.timestamp) < 500_ms
+	       && hrt_elapsed_time(&angular_velocity.timestamp) < 100_ms
+	       && hrt_elapsed_time(&torque_setpoint.timestamp) < 100_ms
+	       && true_airspeed >= vmin && true_airspeed <= vmax;
+}
+
+bool FwGainDesign::request_excitation(Axis axis)
+{
+	if (_excitation_command.load() != 0) {
+		return false;
+	}
+
+	_excitation_command.store(static_cast<uint8_t>(axis) + 1U);
+	return true;
+}
+
+void FwGainDesign::abort_excitation(uint8_t reason)
+{
+	_excitation_rate_sp = 0.f;
+	_excitation_start_requested = false;
+	_excitation_abort_reason = reason;
+	_excitation_state = fw_gain_design_s::EXCITATION_STATE_ABORTED;
+	_calculation_id++;
+}
+
+void FwGainDesign::update_flight_test()
+{
+	_actuator_armed_sub.update();
+	_airspeed_validated_sub.update();
+	_vehicle_angular_velocity_sub.update();
+	_vehicle_torque_setpoint_sub.update();
+	_vehicle_status_sub.update();
+	_vehicle_control_mode_sub.update();
+	_vehicle_land_detected_sub.update();
+	_manual_control_setpoint_sub.update();
+
+	const uint8_t command = _excitation_command.load();
+
+	if (command == 4) {
+		_excitation_command.store(0);
+		abort_excitation(fw_gain_design_s::EXCITATION_ABORT_STOP_REQUESTED);
+		return;
+	}
+
+	if (command >= 1 && command <= 3) {
+		_excitation_command.store(0);
+
+		if (_excitation_state != fw_gain_design_s::EXCITATION_STATE_RUNNING
+		    && _excitation_state != fw_gain_design_s::EXCITATION_STATE_WAITING_FOR_CONDITIONS) {
+			_excitation_axis = static_cast<Axis>(command - 1);
+			_excitation_start_requested = true;
+			_excitation_abort_reason = fw_gain_design_s::EXCITATION_ABORT_NONE;
+			_excitation_rate_sp = 0.f;
+			_excitation_state = fw_gain_design_s::EXCITATION_STATE_WAITING_FOR_CONDITIONS;
+		}
+	}
+
+	if (_excitation_start_requested) {
+		const float amplitude = _param_fw_gd_exc_amp.get();
+		const float frequency = _param_fw_gd_exc_freq.get();
+		const float duration = _param_fw_gd_exc_time.get();
+
+		if (!PX4_ISFINITE(amplitude) || !PX4_ISFINITE(frequency) || !PX4_ISFINITE(duration)
+		    || amplitude <= 0.f || frequency <= 0.f || duration <= kExcitationRampTimeS) {
+			abort_excitation(fw_gain_design_s::EXCITATION_ABORT_INVALID_CONFIGURATION);
+			return;
+		}
+
+		if (_excitation_axis == YAW && _param_fw_yaw_damp_en.get() != 0) {
+			abort_excitation(fw_gain_design_s::EXCITATION_ABORT_YAW_DAMPER);
+			return;
+		}
+
+		_excitation_amplitude = math::radians(amplitude);
+		_excitation_frequency = frequency;
+		_excitation_duration = duration;
+		_excitation_start_requested = false;
+		_excitation_state = fw_gain_design_s::EXCITATION_STATE_WAITING_FOR_CONDITIONS;
+	}
+
+	if (_excitation_state == fw_gain_design_s::EXCITATION_STATE_WAITING_FOR_CONDITIONS) {
+		float true_airspeed = NAN;
+
+		if (!flight_test_conditions_met(_excitation_axis, true_airspeed)) {
+			return;
+		}
+
+		if (_manual_control_setpoint_sub.get().sticks_moving) {
+			return;
+		}
+
+		reset_estimator(_excitation_axis);
+		_excitation_start = hrt_absolute_time();
+		_excitation_state = fw_gain_design_s::EXCITATION_STATE_RUNNING;
+		_excitation_abort_reason = fw_gain_design_s::EXCITATION_ABORT_NONE;
+		_calculation_id++;
+	}
+
+	if (_excitation_state != fw_gain_design_s::EXCITATION_STATE_RUNNING) {
+		return;
+	}
+
+	if (_manual_control_setpoint_sub.get().sticks_moving) {
+		abort_excitation(fw_gain_design_s::EXCITATION_ABORT_PILOT_INPUT);
+		return;
+	}
+
+	float true_airspeed = NAN;
+
+	if (!flight_test_conditions_met(_excitation_axis, true_airspeed)) {
+		abort_excitation(_excitation_axis == YAW && _param_fw_yaw_damp_en.get() != 0
+				 ? fw_gain_design_s::EXCITATION_ABORT_YAW_DAMPER
+				 : fw_gain_design_s::EXCITATION_ABORT_FLIGHT_CONDITIONS);
+		return;
+	}
+
+	const vehicle_angular_velocity_s &angular_velocity = _vehicle_angular_velocity_sub.get();
+	const uint8_t axis_index = static_cast<uint8_t>(_excitation_axis);
+	const float rate_limit = math::radians(_param_fw_gd_exc_rmax.get());
+
+	if (!PX4_ISFINITE(rate_limit) || rate_limit <= 0.f || !PX4_ISFINITE(angular_velocity.xyz[axis_index])
+	    || fabsf(angular_velocity.xyz[axis_index]) > rate_limit) {
+		abort_excitation(fw_gain_design_s::EXCITATION_ABORT_RATE_LIMIT);
+		return;
+	}
+
+	const hrt_abstime now = hrt_absolute_time();
+	const float elapsed = (now - _excitation_start) * 1e-6f;
+
+	if (elapsed >= _excitation_duration) {
+		_excitation_rate_sp = 0.f;
+		finalize_estimate(_excitation_axis);
+		_excitation_state = fw_gain_design_s::EXCITATION_STATE_COMPLETE;
+		_calculation_id++;
+		return;
+	}
+
+	const float ramp = math::constrain(elapsed / kExcitationRampTimeS, 0.f, 1.f);
+	_excitation_rate_sp = _excitation_amplitude * ramp * sinf(2.f * M_PI_F * _excitation_frequency * elapsed);
+
+	if (_last_estimator_sample != angular_velocity.timestamp_sample && _last_estimator_sample != 0) {
+		const float dt = (angular_velocity.timestamp_sample - _last_estimator_sample) * 1e-6f;
+		const vehicle_torque_setpoint_s &torque_setpoint = _vehicle_torque_setpoint_sub.get();
+
+		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f
+		    && hrt_elapsed_time(&torque_setpoint.timestamp) < 100_ms) {
+			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], angular_velocity.xyz_derivative[axis_index],
+					 torque_setpoint.xyz[axis_index], true_airspeed, dt);
+		}
+	}
+
+	_last_estimator_sample = angular_velocity.timestamp_sample;
+}
+
+void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
+{
+	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+		const Axis model_axis = static_cast<Axis>(axis);
+		design.model_source[axis] = model_source_is_estimated(model_axis) ?
+				     fw_gain_design_s::MODEL_SOURCE_FLIGHT_TEST : fw_gain_design_s::MODEL_SOURCE_MANUAL;
+		design.excitation_rate_sp[axis] = (_excitation_state == fw_gain_design_s::EXCITATION_STATE_RUNNING
+						   && axis == static_cast<uint8_t>(_excitation_axis)) ? _excitation_rate_sp : 0.f;
+		design.identification_sample_count[axis] = _estimator[axis].sample_count;
+		design.identified_airspeed[axis] = _identified_airspeed[axis];
+		design.identified_rate_a[axis] = _identified_rate_a[axis];
+		design.identified_rate_b[axis] = _identified_rate_b[axis];
+		design.identified_damping_derivative[axis] = _identified_damping_derivative[axis];
+		design.identified_control_derivative[axis] = _identified_control_derivative[axis];
+		design.identification_valid[axis] = _identified_valid[axis];
+
+		if (_estimator[axis].sample_count > 0) {
+			const float rms_output = sqrtf(_estimator[axis].output_sum_sq / _estimator[axis].sample_count);
+			design.identification_fit[axis] = sqrtf(_estimator[axis].residual_sum_sq / _estimator[axis].sample_count)
+								   / fmaxf(rms_output, 0.01f);
+
+		} else {
+			design.identification_fit[axis] = NAN;
+		}
+	}
+
+	design.excitation_state = _excitation_state;
+	design.excitation_axis = static_cast<uint8_t>(_excitation_axis);
+	design.excitation_abort_reason = _excitation_abort_reason;
+	design.excitation_elapsed_s = _excitation_start > 0 && _excitation_state == fw_gain_design_s::EXCITATION_STATE_RUNNING ?
+					  (hrt_absolute_time() - _excitation_start) * 1e-6f : 0.f;
+}
+
 
 void FwGainDesign::publish_next_design_point()
 {
@@ -343,6 +752,8 @@ void FwGainDesign::publish_next_design_point()
 		calculate_design(NAN, design);
 	}
 
+	fill_flight_test_status(design);
+
 	_gain_design_pub.publish(design);
 }
 
@@ -356,7 +767,10 @@ bool FwGainDesign::apply_enabled(Axis axis) const
 		return _param_fw_gd_apply_p.get() != 0;
 
 	case YAW:
-		return _param_fw_gd_apply_y.get() != 0;
+		// Aileron yaw damping owns this aircraft's yaw response and disables
+		// the yaw-rate controller. Never let a selected scheduling switch
+		// appear to tune an inactive loop.
+		return _param_fw_gd_apply_y.get() != 0 && _param_fw_yaw_damp_en.get() == 0;
 
 	default:
 		return false;
@@ -515,7 +929,13 @@ void FwGainDesign::apply_live_gains()
 		const bool attitude_design_valid = gain_axis == YAW || PX4_ISFINITE(design.attitude_tc[axis]);
 
 		if (apply_enabled(gain_axis)) {
-			if (design.axis_status[axis] == fw_gain_design_s::AXIS_STATUS_VALID && attitude_design_valid) {
+			// Keep the known, baseline controller fixed while it is the plant
+			// under test. An identified source becomes eligible immediately after
+			// a valid completed test, not during its excitation.
+			const bool axis_is_under_test = _excitation_state == fw_gain_design_s::EXCITATION_STATE_RUNNING
+							   && gain_axis == _excitation_axis;
+
+			if (!axis_is_under_test && design.axis_status[axis] == fw_gain_design_s::AXIS_STATUS_VALID && attitude_design_valid) {
 				changed |= apply_axis(gain_axis, design);
 
 			} else {
@@ -544,6 +964,7 @@ void FwGainDesign::Run()
 		reset_schedule();
 	}
 
+	update_flight_test();
 	apply_live_gains();
 	publish_next_design_point();
 }
@@ -572,6 +993,50 @@ int FwGainDesign::task_spawn(int argc, char *argv[])
 
 int FwGainDesign::custom_command(int argc, char *argv[])
 {
+	if (argc >= 1 && strcmp(argv[0], "excite") == 0) {
+		FwGainDesign *instance = get_instance();
+
+		if (!instance) {
+			return PX4_ERROR;
+		}
+
+		if (argc == 2 && strcmp(argv[1], "stop") == 0) {
+			instance->_excitation_command.store(4);
+			return PX4_OK;
+		}
+
+		if (argc >= 2 && strcmp(argv[1], "start") == 0) {
+			int32_t selected_axis = instance->_param_fw_gd_exc_axis.get();
+
+			if (argc == 3) {
+				if (strcmp(argv[2], "roll") == 0) {
+					selected_axis = 1;
+
+				} else if (strcmp(argv[2], "pitch") == 0) {
+					selected_axis = 2;
+
+				} else if (strcmp(argv[2], "yaw") == 0) {
+					selected_axis = 3;
+
+				} else {
+					return print_usage("axis must be roll, pitch, or yaw");
+				}
+			}
+
+			if (selected_axis < 1 || selected_axis > 3) {
+				return print_usage("set FW_GD_EXC_AXIS or specify roll, pitch, or yaw");
+			}
+
+			if (!instance->request_excitation(static_cast<Axis>(selected_axis - 1))) {
+				PX4_WARN("excitation already active");
+				return PX4_ERROR;
+			}
+
+			PX4_INFO("waiting to excite %s", selected_axis == 1 ? "roll" : selected_axis == 2 ? "pitch" : "yaw");
+			return PX4_OK;
+		}
+	}
+
 	return print_usage("unknown command");
 }
 
@@ -581,6 +1046,8 @@ int FwGainDesign::print_status()
 			 (unsigned)(_speed_index + 1U), (unsigned)_speed_count);
 	PX4_INFO("live apply: roll %s, pitch %s, yaw %s", apply_enabled(ROLL) ? "enabled" : "disabled",
 		 apply_enabled(PITCH) ? "enabled" : "disabled", apply_enabled(YAW) ? "enabled" : "disabled");
+	PX4_INFO("excitation: state %u axis %u samples %u", (unsigned)_excitation_state,
+		 (unsigned)_excitation_axis, (unsigned)_estimator[static_cast<uint8_t>(_excitation_axis)].sample_count);
 	return PX4_OK;
 }
 
@@ -598,10 +1065,19 @@ Calculates a speed-indexed fixed-wing rate and attitude gain design from a
 decoupled aerodynamic model. It always publishes `fw_gain_design`. The
 optional per-axis live-apply switches use fresh true airspeed only while
 armed, and restore the prior parameters when disarmed or disabled.
+
+`excite start [roll|pitch|yaw]` begins one explicitly requested, bounded
+flight test after fixed-wing, armed, airborne, stabilized conditions are met.
+`excite stop` removes the excitation immediately. The test is aborted by any
+pilot stick movement, rate-limit breach, loss of conditions, or enabled
+aileron yaw damper on the yaw axis.
 )DESCR_STR");
 
 	PRINT_MODULE_USAGE_NAME("fw_gain_design", "controller");
 	PRINT_MODULE_USAGE_COMMAND("start");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("excite start", "Start the FW_GD_EXC_AXIS flight test");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("excite start roll|pitch|yaw", "Start one selected flight test");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("excite stop", "Abort the active flight test");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;

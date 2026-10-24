@@ -52,3 +52,43 @@ uint8 AXIS_STATUS_NONFINITE_RESULT = 5
 uint8 SCHEDULE_STATUS_VALID = 0
 uint8 SCHEDULE_STATUS_INVALID_RANGE = 1
 uint8 schedule_status
+
+# Model source used independently for roll, pitch, yaw: 0 manual parameters,
+# 1 retained flight-test estimate.
+uint8[3] model_source
+uint8 MODEL_SOURCE_MANUAL = 0
+uint8 MODEL_SOURCE_FLIGHT_TEST = 1
+
+# Flight-test excitation telemetry. Excitation is a bounded rate-setpoint
+# addition handled by fixed-wing attitude control; this module never publishes
+# a competing torque setpoint.
+uint8 excitation_state
+uint8 EXCITATION_STATE_IDLE = 0
+uint8 EXCITATION_STATE_WAITING_FOR_CONDITIONS = 1
+uint8 EXCITATION_STATE_RUNNING = 2
+uint8 EXCITATION_STATE_COMPLETE = 3
+uint8 EXCITATION_STATE_ABORTED = 4
+
+uint8 excitation_axis                 # 0 roll, 1 pitch, 2 yaw
+float32[3] excitation_rate_sp         # injected body-rate setpoint [rad/s]
+float32 excitation_elapsed_s
+uint8 excitation_abort_reason
+uint8 EXCITATION_ABORT_NONE = 0
+uint8 EXCITATION_ABORT_STOP_REQUESTED = 1
+uint8 EXCITATION_ABORT_INVALID_CONFIGURATION = 2
+uint8 EXCITATION_ABORT_FLIGHT_CONDITIONS = 3
+uint8 EXCITATION_ABORT_PILOT_INPUT = 4
+uint8 EXCITATION_ABORT_RATE_LIMIT = 5
+uint8 EXCITATION_ABORT_YAW_DAMPER = 6
+
+# Identified linear rate models. They use rate_dot = a * rate + b * command
+# and are converted to the normal non-dimensional derivatives below at the
+# identified true airspeed. Invalid or unavailable values are NaN.
+uint32[3] identification_sample_count
+float32[3] identified_airspeed
+float32[3] identified_rate_a
+float32[3] identified_rate_b
+float32[3] identified_damping_derivative # Cl_p, Cm_q, Cn_r
+float32[3] identified_control_derivative # Cl_du, Cm_du, Cn_du [per rad]
+float32[3] identification_fit            # normalized RMS residual, lower is better
+bool[3] identification_valid

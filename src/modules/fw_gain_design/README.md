@@ -1,9 +1,9 @@
 # Fixed-wing aerodynamic gain design
 
 `fw_gain_design` is an advisory calculation module by default. Start it with
-`fw_gain_design start`; it then publishes one `fw_gain_design` sample every
-100 ms and cycles continuously through the configured speed schedule. It never
-publishes a torque or actuator setpoint.
+`fw_gain_design start`; it publishes `fw_gain_design` at 50 Hz and cycles
+continuously through the configured speed schedule. It never publishes a
+torque or actuator setpoint.
 
 ## Optional live application
 
@@ -21,6 +21,107 @@ axis and restores them when that axis is disabled, true airspeed becomes
 unavailable or leaves the design range, the vehicle disarms, or the module is
 stopped. Do not enable yaw application with `FW_YAW_DAMP_EN`, because the
 aileron yaw damper intentionally disables the yaw-rate loop.
+
+## Manual or identified model, per axis
+
+The existing aerodynamic parameters remain the manual model inputs. `FW_GD_R_SRC`,
+`FW_GD_P_SRC`, and `FW_GD_Y_SRC` select their source independently:
+
+- `0` — Manual parameters (`FW_GD_CLP` / `FW_GD_CLDU`, `FW_GD_CMQ` /
+  `FW_GD_CMDU`, or `FW_GD_CNR` / `FW_GD_CNDU`). This is the default.
+- `1` — The most recent valid in-flight estimate for that one axis.
+
+An identified model exists in RAM only. It is published on `fw_gain_design`,
+but does not overwrite your manually entered derivatives or survive a reboot.
+That is intentional: an unreviewed flight estimate must not become a permanent
+airframe parameter. If an estimated source is selected but no valid estimate
+exists, that axis is invalid and its live gains are restored rather than
+falling back silently to manual values.
+
+## Flight-test excitation and identification
+
+The module identifies the exact decoupled rate plant used by this gain designer:
+
+```
+rate_dot = a * rate + b * normalized_torque_command + bias
+```
+
+During a test it adds one small, zero-mean sine **body-rate setpoint** to the
+normal fixed-wing attitude controller. The normal rate controller then creates
+the torque command; the estimator uses that actual command and the filtered
+angular acceleration from `vehicle_angular_velocity`. It never races the rate
+controller or control allocator by publishing a second `vehicle_torque_setpoint`.
+
+Recursive least squares estimates `a`, `b`, and the constant bias. At the end
+of a qualifying test, the module converts the result at the mean tested true
+airspeed into the normal physical derivatives:
+
+```
+Cl_p/Cm_q/Cn_r = 4 I a / (rho V S L^2)
+Cl_du/Cm_du/Cn_du = 2 I b / (rho V^2 S L delta_max)
+```
+
+Here `L` is span for roll/yaw and chord for pitch; `delta_max` is the existing
+physical travel parameter for that axis. Therefore area, reference dimensions,
+inertia, density, and surface travel must be correct even when using flight
+identification.
+
+Only the damping and control derivatives used by this module are identifiable
+with these isolated SISO tests. It does **not** estimate static derivatives
+such as `Cm_alpha`, nor cross-axis/Dutch-roll/short-period terms such as
+`Cn_beta`, `Cl_r`, or `Cm_alpha`. Do not interpret the output as a full 6-DOF
+aerodynamic model.
+
+### Safe test sequence
+
+1. Keep the manual model source selected and verify that the existing gains
+   fly safely. Do not enable live scheduling for the axis being tested.
+2. Set the applicable geometry, inertia, density, and `*_MAX` surface travel.
+   Choose `FW_GD_EXC_AXIS`, a modest `FW_GD_EXC_AMP` (default 4 deg/s),
+   frequency (default 0.7 Hz), duration, and rate safety limit.
+3. In stable, level, fixed-wing, attitude-controlled flight with fresh true
+   airspeed inside `FW_GD_VMIN..FW_GD_VMAX`, run one of:
+
+   ```
+   fw_gain_design excite start
+   fw_gain_design excite start roll
+   fw_gain_design excite start pitch
+   fw_gain_design excite start yaw
+   ```
+
+   The bare `start` uses `FW_GD_EXC_AXIS`; the named form selects that one
+   test without changing the stored parameter. Stop it at any time with:
+
+   ```
+   fw_gain_design excite stop
+   ```
+
+4. Check `listener fw_gain_design 1`. A usable result has
+   `excitation_state = COMPLETE`, a non-zero `identification_sample_count`,
+   `identification_valid[axis] = true`, negative identified damping, positive
+   identified control derivative, and a small `identification_fit` (normalized
+   RMS residual; lower is better).
+5. Set only the tested axis' source to `1`. Review the generated gains. To
+   schedule and apply those gains in flight, additionally enable the existing
+   corresponding `FW_GD_APPLY_R`, `FW_GD_APPLY_P`, or `FW_GD_APPLY_Y` switch.
+   The gains are then applied only while the aircraft is armed, airspeed is
+   valid and in range, and the estimate remains valid.
+
+The test waits without injecting until all conditions are true. It injects
+nothing on the ground, during a transition, in failsafe, outside the speed
+range, or unless both attitude and rate control are active. It ramps in over
+two seconds, runs one axis only, and automatically removes the setpoint on
+completion. It aborts immediately on pilot stick movement, loss of any flight
+condition, a selected-axis rate breach, an explicit stop, or a stale input.
+
+Yaw excitation is refused while `FW_YAW_DAMP_EN=1`. That is required for your
+rudderless aileron-yaw-damper aircraft: it has no physical yaw-axis control
+surface to identify as `Cn_du`. Keep `FW_GD_Y_SRC=0` and `FW_GD_APPLY_Y=0` on
+that airframe.
+
+For `fmuv6x`, the older PX4 fixed-wing autotune module is disabled to reserve
+flash for this physical-model estimator. The simulation PWM output remains
+enabled.
 
 ## Model and required inputs
 
@@ -76,5 +177,5 @@ model. `px4_airspeed` reports the matching ISA equivalent/calibrated speed
 `surface_rate_*` are direct physical surface-command gains. `px4_rate_*` are
 the equivalent values for `FW_RR_*`, `FW_PR_*`, and `FW_YR_*`, after accounting
 for the currently selected PX4 fixed-wing airspeed scaling and trim airspeed.
-The results are published for review only; copying any of them into flight
-parameters remains a deliberate manual action.
+The results are published for review. They remain advisory unless the existing
+per-axis `FW_GD_APPLY_*` switch is deliberately enabled.
