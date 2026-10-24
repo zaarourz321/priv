@@ -46,6 +46,7 @@
 #include <cmath>
 
 #include <lib/parameters/param.h>
+#include <matrix/matrix/math.hpp>
 #include <px4_platform_common/atomic.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/module_params.h>
@@ -58,10 +59,13 @@
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
+#include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_control_mode.h>
 #include <uORB/topics/vehicle_land_detected.h>
+#include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_torque_setpoint.h>
+#include <uORB/topics/wind.h>
 
 using namespace time_literals;
 
@@ -92,9 +96,10 @@ private:
 	void calculate_design(float true_airspeed, fw_gain_design_s &design) const;
 	void update_flight_test();
 	void reset_estimator(Axis axis);
-	void update_estimator(Axis axis, float rate, float torque, float true_airspeed, float dt);
+	void update_estimator(Axis axis, float rate, float torque, float angle_of_attack, float true_airspeed, float dt);
 	void finalize_estimate(Axis axis);
 	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
+	bool estimate_angle_of_attack(float &angle_of_attack) const;
 	bool model_source_is_estimated(Axis axis) const;
 	bool estimate_valid(Axis axis) const;
 	bool request_excitation(Axis axis);
@@ -113,25 +118,30 @@ private:
 	static constexpr uint32_t kEstimatorWarmupSamples = 100;
 
 	struct RateEstimator {
-		// Discrete first-order model: rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
-		// Identifying rate directly avoids differentiating a noisy gyro signal. A and B
-		// are converted to the continuous a and b coefficients only after the test.
-		float theta[3] {}; // A, B, constant offset
-		float covariance[3][3] {};
+		// Regular axes use rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
+		// The optional pitch short-period model uses q[k] = A_alpha * alpha[k-1]
+		// + A_q * q[k-1] + B * command[k-delay] + offset. Identifying rate
+		// directly avoids differentiating a noisy gyro signal.
+		float theta[4] {}; // Regular: A, B, offset. Pitch: A_alpha, A_q, B, offset.
+		float covariance[4][4] {};
 		float residual_sum_sq{0.f};
 		float output_sum_sq{0.f};
 		float output_sum{0.f};
 		float command_sum{0.f};
 		float command_sum_sq{0.f};
 		float airspeed_sum{0.f};
+		float angle_of_attack_sum{0.f};
 		float dt_sum{0.f};
 		float filtered_rate{NAN};
 		float previous_filtered_rate{NAN};
+		float filtered_angle_of_attack{NAN};
+		float previous_filtered_angle_of_attack{NAN};
 		float filtered_torque{NAN};
 		float torque_history[kTorqueHistoryLength] {};
 		uint32_t sample_count{0};
 		uint32_t fit_sample_count{0};
 		uint8_t torque_history_index{0};
+		bool pitch_short_period{false};
 		bool filters_initialized{false};
 		bool initialized{false};
 	};
@@ -140,11 +150,14 @@ private:
 	uORB::SubscriptionData<airspeed_validated_s> _airspeed_validated_sub{ORB_ID(airspeed_validated)};
 	uORB::SubscriptionData<actuator_armed_s> _actuator_armed_sub{ORB_ID(actuator_armed)};
 	uORB::SubscriptionData<vehicle_angular_velocity_s> _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
+	uORB::SubscriptionData<vehicle_attitude_s> _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::SubscriptionData<vehicle_torque_setpoint_s> _vehicle_torque_setpoint_sub{ORB_ID(vehicle_torque_setpoint)};
+	uORB::SubscriptionData<vehicle_local_position_s> _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
 	uORB::SubscriptionData<vehicle_status_s> _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::SubscriptionData<vehicle_control_mode_s> _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::SubscriptionData<vehicle_land_detected_s> _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
 	uORB::SubscriptionData<manual_control_setpoint_s> _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
+	uORB::SubscriptionData<wind_s> _wind_sub{ORB_ID(wind)};
 	uORB::Publication<fw_gain_design_s> _gain_design_pub{ORB_ID(fw_gain_design)};
 
 	uint32_t _calculation_id{0};
@@ -160,6 +173,8 @@ private:
 	float _identified_rate_a[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_rate_b[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_airspeed[AXIS_COUNT] {NAN, NAN, NAN};
+	float _identified_pitch_cm_alpha{NAN};
+	float _identified_pitch_angle_of_attack{NAN};
 	bool _identified_valid[AXIS_COUNT] {};
 	uint8_t _identification_reject_reason[AXIS_COUNT] {
 		fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN,
@@ -234,6 +249,7 @@ private:
 		(ParamFloat<px4::params::FW_GD_EST_TC>) _param_fw_gd_est_tc,
 		(ParamFloat<px4::params::FW_GD_EST_FC>) _param_fw_gd_est_fc,
 		(ParamFloat<px4::params::FW_GD_EST_DLY>) _param_fw_gd_est_dly,
+		(ParamInt<px4::params::FW_GD_P_SP_EN>) _param_fw_gd_p_sp_en,
 		(ParamInt<px4::params::FW_GD_EST_MIN>) _param_fw_gd_est_min,
 		(ParamInt<px4::params::FW_GD_APPLY_R>) _param_fw_gd_apply_r,
 		(ParamInt<px4::params::FW_GD_APPLY_P>) _param_fw_gd_apply_p,

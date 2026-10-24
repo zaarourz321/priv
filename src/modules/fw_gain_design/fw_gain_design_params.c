@@ -580,6 +580,20 @@ PARAM_DEFINE_FLOAT(FW_GD_EST_FC, 2.0f);
 PARAM_DEFINE_FLOAT(FW_GD_EST_DLY, 0.06f);
 
 /**
+ * Use alpha-coupled pitch identification
+ *
+ * When enabled, pitch tests estimate a two-state short-period model using
+ * body-rate and angle of attack reconstructed from air-relative velocity.
+ * This separates Cm_q from Cm_alpha coupling. It requires fresh local
+ * velocity and attitude data. Disable only to use the older one-state,
+ * effective pitch-rate model.
+ *
+ * @boolean
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_INT32(FW_GD_P_SP_EN, 1);
+
+/**
  * Minimum identification samples
  *
  * A completed test needs at least this many accepted samples before its

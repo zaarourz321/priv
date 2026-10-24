@@ -76,6 +76,24 @@ physical travel parameter for that axis. Therefore area, reference dimensions,
 inertia, density, and surface travel must be correct even when using flight
 identification.
 
+### Pitch short-period model
+
+With `FW_GD_P_SP_EN=1` (the default), the pitch estimator does not treat the
+airframe as a one-state `q` model. It reconstructs angle of attack from
+air-relative NED velocity, the EKF wind estimate when available, and vehicle
+attitude, then estimates:
+
+```
+q[k] = A_alpha * alpha[k-1] + A_q * q[k-1] + B * command[k-delay] + bias
+```
+
+This separates the `Cm_alpha` contribution from `Cmq`; it publishes the mean
+identified alpha and `identified_pitch_cm_alpha` for review. Fresh local
+velocity and attitude are required for a pitch test. In HIL without a wind
+topic, the estimator explicitly falls back to zero wind. That is appropriate
+only when the simulated wind is zero. In real flight, a valid wind estimate is
+needed for an accurate physical angle of attack.
+
 Only the damping and control derivatives used by this module are identifiable
 with these isolated SISO tests. It does **not** estimate static derivatives
 such as `Cm_alpha`, nor cross-axis/Dutch-roll/short-period terms such as
@@ -110,7 +128,9 @@ aerodynamic model.
     `excitation_state = COMPLETE`, a non-zero `identification_sample_count`,
     `identification_valid[axis] = true`, negative identified damping, positive
     identified control derivative, and a small `identification_fit` (normalized
-    RMS residual; lower is better). If it is rejected, inspect
+    RMS residual; lower is better). For pitch short-period tests, also check
+    `identified_pitch_short_period = true` and the reported mean alpha. If it
+    is rejected, inspect
     `identification_reject_reason[axis]` and the published candidate values;
     candidates are diagnostic only until `identification_valid` is true.
 5. Set only the tested axis' source to `1`. Review the generated gains. To

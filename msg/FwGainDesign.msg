@@ -94,6 +94,13 @@ float32[3] identified_control_derivative # Cl_du, Cm_du, Cn_du [per rad]
 float32[3] identification_fit            # normalized RMS residual, lower is better
 bool[3] identification_valid
 
+# Pitch-only short-period identification diagnostics. When enabled, the pitch
+# estimator uses estimated angle of attack as a separate state so Cmq is not
+# contaminated by Cm_alpha coupling. Angle of attack is in radians.
+bool identified_pitch_short_period
+float32 identified_pitch_cm_alpha
+float32 identified_pitch_angle_of_attack
+
 # Per-axis reason why a completed candidate was rejected. A value of VALID is
 # only meaningful when the corresponding identification_valid element is true.
 uint8[3] identification_reject_reason
