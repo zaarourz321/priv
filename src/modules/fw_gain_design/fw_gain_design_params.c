@@ -531,26 +531,11 @@ PARAM_DEFINE_FLOAT(FW_GD_EXC_TIME, 30.0f);
 PARAM_DEFINE_FLOAT(FW_GD_EXC_RMAX, 45.0f);
 
 /**
- * Identification forgetting time constant
- *
- * Recursive least-squares memory used during a flight test. A longer value
- * gives a quieter estimate but needs more excitation data.
- *
- * @unit s
- * @min 2.0
- * @max 120.0
- * @decimal 1
- * @increment 1.0
- * @group FW Gain Design Excitation
- */
-PARAM_DEFINE_FLOAT(FW_GD_EST_TC, 20.0f);
-
-/**
  * Identification rate filter cutoff
  *
  * Low-pass cutoff used identically on measured body rate and the allocated
- * physical control-surface command before the simple discrete model is
- * estimated. Keep it above the commanded excitation and below servo noise.
+ * physical control-surface command before their single-frequency response is
+ * measured. Keep it above the commanded excitation and below servo noise.
  *
  * @unit Hz
  * @min 0.1
@@ -565,8 +550,9 @@ PARAM_DEFINE_FLOAT(FW_GD_EST_FC, 2.0f);
  * Identification control-input delay
  *
  * Delay between the allocated physical control-surface command and its
- * aerodynamic effect. Set a measured non-zero value only for real hardware
- * with known servo transport delay.
+ * aerodynamic effect. The estimator compensates its phase at the selected
+ * excitation frequency. Set a measured non-zero value for servo or HIL
+ * transport delay.
  *
  * @unit s
  * @min 0.0

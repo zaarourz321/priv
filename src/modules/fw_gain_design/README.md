@@ -97,19 +97,21 @@ is not a physical deflection and cannot produce a trustworthy control
 derivative.
 
 To prevent raw gyro angular-acceleration noise from invalidating slow aircraft
-tests, the estimator first low-pass filters rate and the corresponding physical
-control input equally, applies a configurable input delay, and fits the
-discrete model:
+tests, the estimator low-pass filters rate and the corresponding physical
+control input equally. After the ramp and one settling cycle, it synchronously
+fits the sine component of both signals. Their complex ratio is the measured
+open-loop rate-to-surface response:
 
 ```
-rate[k] = A * rate[k-1] + B * command[k-delay] + bias
+H(jω) = rate(jω) / surface_command(jω)
 ```
 
-It then converts `A` and `B` to the continuous `a` and `b` above. `FW_GD_EST_FC`
-is the filter cutoff and `FW_GD_EST_DLY` is the command-to-response delay. The
-defaults are 2 Hz and zero delay, appropriate for HIL or direct surface-command
-models. On real hardware, enter a measured non-zero servo transport delay. At
-the end of a qualifying test, the module converts the result at the
+For the first-order plant `H(jω) = b / (jω - a)`, the inverse response gives
+`a` and `b` directly. `FW_GD_EST_FC` is the filter cutoff and `FW_GD_EST_DLY`
+compensates the command-to-response delay as a phase shift. The defaults are
+2 Hz and zero delay, appropriate for HIL or direct surface-command models. On
+real hardware, enter a measured non-zero servo transport delay. At the end of
+a qualifying test, the module converts the result at the
 mean tested true airspeed into the normal physical derivatives:
 
 ```
@@ -149,8 +151,9 @@ identification.
 4. Check `listener fw_gain_design 1`. A usable result has
     `excitation_state = COMPLETE`, a non-zero `identification_sample_count`,
     `identification_valid[axis] = true`, negative identified damping, positive
-    identified control derivative, and a small `identification_fit` (normalized
-    RMS residual; lower is better). If a result is rejected, inspect
+    identified control derivative, and a small `identification_fit` (the worse
+    normalized harmonic residual of rate and surface command; lower is better).
+    If a result is rejected, inspect
     `identification_reject_reason[axis]` and the published candidate values;
     candidates are diagnostic only until `identification_valid` is true.
 5. Set only the tested axis' source to `1`. Review the generated gains. To

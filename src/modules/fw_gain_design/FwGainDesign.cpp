@@ -52,7 +52,7 @@ namespace
 constexpr char kSdModelPath[] = "/fs/microsd/fw_gain_design_model.bin";
 constexpr char kSdModelTemporaryPath[] = "/fs/microsd/fw_gain_design_model.tmp";
 constexpr uint32_t kSdModelMagic = 0x46574744U; // "FWGD"
-constexpr uint16_t kSdModelVersion = 2;
+constexpr uint16_t kSdModelVersion = 3;
 }
 
 FwGainDesign::FwGainDesign() :
@@ -468,13 +468,6 @@ void FwGainDesign::reset_estimator(Axis axis)
 	RateEstimator &estimator = _estimator[static_cast<uint8_t>(axis)];
 	estimator = {};
 
-	const uint8_t model_order = 3;
-
-	// Large diagonal covariance permits convergence from no a-priori estimate.
-	for (uint8_t i = 0; i < model_order; ++i) {
-		estimator.covariance[i][i] = 1e3f;
-	}
-
 	estimator.initialized = true;
 	_identified_valid[static_cast<uint8_t>(axis)] = false;
 	_identified_damping_derivative[static_cast<uint8_t>(axis)] = NAN;
@@ -482,6 +475,7 @@ void FwGainDesign::reset_estimator(Axis axis)
 	_identified_rate_a[static_cast<uint8_t>(axis)] = NAN;
 	_identified_rate_b[static_cast<uint8_t>(axis)] = NAN;
 	_identified_airspeed[static_cast<uint8_t>(axis)] = NAN;
+	_identification_fit[static_cast<uint8_t>(axis)] = NAN;
 	_identification_reject_reason[static_cast<uint8_t>(axis)] = fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN;
 	_last_estimator_sample = 0;
 }
@@ -620,65 +614,40 @@ bool FwGainDesign::save_model_to_sd()
 	return true;
 }
 
-bool FwGainDesign::update_rls(float theta[kMaxModelOrder], float covariance[kMaxModelOrder][kMaxModelOrder],
-			       const float phi[kMaxModelOrder], uint8_t model_order, float output,
-			       float forgetting_factor, float &fitted_output)
+bool FwGainDesign::fit_harmonic(const RateEstimator &estimator, const HarmonicSignal &signal, HarmonicFit &fit)
 {
-	float covariance_phi[kMaxModelOrder] {};
+	const float sample_count = static_cast<float>(estimator.sample_count);
 
-	for (uint8_t i = 0; i < model_order; ++i) {
-		for (uint8_t j = 0; j < model_order; ++j) {
-			covariance_phi[i] += covariance[i][j] * phi[j];
-		}
-	}
-
-	float denominator = forgetting_factor;
-
-	for (uint8_t i = 0; i < model_order; ++i) {
-		denominator += phi[i] * covariance_phi[i];
-	}
-
-	if (!PX4_ISFINITE(denominator) || denominator <= FLT_EPSILON) {
+	if (sample_count < 3.f) {
 		return false;
 	}
 
-	float predicted_output = 0.f;
+	// Solve x = offset + cosine * cos(phase) + sine * sin(phase). Centering
+	// the normal equations removes trim and slow navigation corrections.
+	const float centered_cos_sq = estimator.sum_cos_sq - estimator.sum_cos * estimator.sum_cos / sample_count;
+	const float centered_sin_sq = estimator.sum_sin_sq - estimator.sum_sin * estimator.sum_sin / sample_count;
+	const float centered_cos_sin = estimator.sum_cos_sin - estimator.sum_cos * estimator.sum_sin / sample_count;
+	const float centered_x_cos = signal.sum_cos - signal.sum * estimator.sum_cos / sample_count;
+	const float centered_x_sin = signal.sum_sin - signal.sum * estimator.sum_sin / sample_count;
+	const float determinant = centered_cos_sq * centered_sin_sq - centered_cos_sin * centered_cos_sin;
 
-	for (uint8_t i = 0; i < model_order; ++i) {
-		predicted_output += phi[i] * theta[i];
+	if (!PX4_ISFINITE(determinant) || determinant <= FLT_EPSILON) {
+		return false;
 	}
 
-	const float innovation = output - predicted_output;
+	fit.cosine = (centered_x_cos * centered_sin_sq - centered_x_sin * centered_cos_sin) / determinant;
+	fit.sine = (centered_x_sin * centered_cos_sq - centered_x_cos * centered_cos_sin) / determinant;
+	const float mean = signal.sum / sample_count;
+	const float total_variance = fmaxf(signal.sum_sq - signal.sum * mean, 0.f);
+	const float explained_variance = fit.cosine * centered_x_cos + fit.sine * centered_x_sin;
+	const float residual_variance = fmaxf(total_variance - explained_variance, 0.f);
+	fit.residual_ratio = sqrtf(residual_variance / fmaxf(total_variance, 1e-6f));
 
-	for (uint8_t i = 0; i < model_order; ++i) {
-		theta[i] += covariance_phi[i] * innovation / denominator;
-	}
-
-	for (uint8_t i = 0; i < model_order; ++i) {
-		for (uint8_t j = 0; j < model_order; ++j) {
-			covariance[i][j] = (covariance[i][j] - covariance_phi[i] * covariance_phi[j] / denominator) / forgetting_factor;
-		}
-	}
-
-	// Keep round-off from breaking the covariance symmetry used by the next update.
-	for (uint8_t i = 0; i < model_order; ++i) {
-		for (uint8_t j = i + 1; j < model_order; ++j) {
-			const float symmetric_value = 0.5f * (covariance[i][j] + covariance[j][i]);
-			covariance[i][j] = symmetric_value;
-			covariance[j][i] = symmetric_value;
-		}
-	}
-
-	fitted_output = 0.f;
-
-	for (uint8_t i = 0; i < model_order; ++i) {
-		fitted_output += phi[i] * theta[i];
-	}
-
-	return PX4_ISFINITE(fitted_output);
+	return PX4_ISFINITE(fit.cosine) && PX4_ISFINITE(fit.sine) && PX4_ISFINITE(fit.residual_ratio);
 }
 
-void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, float true_airspeed, float dt)
+void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, float true_airspeed, float dt, float phase,
+				     float elapsed_s)
 {
 	const uint8_t axis_index = static_cast<uint8_t>(axis);
 	RateEstimator &estimator = _estimator[axis_index];
@@ -689,77 +658,56 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, 
 		return;
 	}
 
-	const float time_constant = _param_fw_gd_est_tc.get();
 	const float filter_cutoff_hz = _param_fw_gd_est_fc.get();
-	const float input_delay_s = _param_fw_gd_est_dly.get();
 
-	if (!PX4_ISFINITE(time_constant) || time_constant <= dt || !PX4_ISFINITE(filter_cutoff_hz)
-	    || filter_cutoff_hz <= 0.f || !PX4_ISFINITE(input_delay_s) || input_delay_s < 0.f) {
+	if (!PX4_ISFINITE(filter_cutoff_hz) || filter_cutoff_hz <= 0.f || !PX4_ISFINITE(phase)
+	    || !PX4_ISFINITE(elapsed_s)) {
 		return;
 	}
 
 	// The sensor's angular acceleration is intentionally not used here. At the
 	// low frequencies of an aircraft flight test it is derivative-noise
-	// dominated. Instead identify the equivalent discrete plant directly from
-	// equally filtered rate and physical control command.
+	// dominated. Instead, measure the rate-to-surface frequency response at
+	// the explicitly injected sine frequency.
 	const float filter_time_constant = 1.f / (2.f * M_PI_F * filter_cutoff_hz);
 	const float filter_alpha = math::constrain(dt / (dt + filter_time_constant), 0.001f, 0.95f);
 
 	if (!estimator.filters_initialized) {
 		estimator.filtered_rate = rate;
-		estimator.previous_filtered_rate = rate;
-		estimator.filtered_torque = control_input;
-
-		for (float &history_sample : estimator.torque_history) {
-			history_sample = control_input;
-		}
-
+		estimator.filtered_control = control_input;
 		estimator.filters_initialized = true;
 		return;
 	}
 
 	estimator.filtered_rate += filter_alpha * (rate - estimator.filtered_rate);
+	estimator.filtered_control += filter_alpha * (control_input - estimator.filtered_control);
 
-	estimator.filtered_torque += filter_alpha * (control_input - estimator.filtered_torque);
-
-	const int delay_samples = math::constrain(static_cast<int>(roundf(input_delay_s / dt)), 0,
-			static_cast<int>(kTorqueHistoryLength) - 1);
-	estimator.torque_history[estimator.torque_history_index] = estimator.filtered_torque;
-	const uint8_t delayed_index = static_cast<uint8_t>((estimator.torque_history_index + kTorqueHistoryLength
-			- static_cast<uint8_t>(delay_samples)) % kTorqueHistoryLength);
-	const float delayed_torque = estimator.torque_history[delayed_index];
-	estimator.torque_history_index = static_cast<uint8_t>((estimator.torque_history_index + 1U) % kTorqueHistoryLength);
-
-	// The offset makes trim torque and slow navigation corrections harmless.
-	float phi[kMaxModelOrder] {};
-	phi[0] = estimator.previous_filtered_rate;
-	phi[1] = delayed_torque;
-	phi[2] = 1.f;
-	const float measured_rate = estimator.filtered_rate;
-
-	const float forgetting_factor = math::constrain(1.f - dt / time_constant, 0.95f, 0.9999f);
-	float fitted_rate = 0.f;
-
-	if (!update_rls(estimator.theta, estimator.covariance, phi, 3, measured_rate, forgetting_factor, fitted_rate)) {
+	// Exclude the rate-setpoint ramp and one complete sine cycle. This lets the
+	// rate loop and surface command reach their periodic response before the
+	// frequency response is measured.
+	if (elapsed_s < kExcitationRampTimeS + 1.f / _excitation_frequency) {
 		return;
 	}
 
-	// Do not grade the intentional RLS convergence transient.
-	if (estimator.sample_count >= kEstimatorWarmupSamples) {
-		const float residual = measured_rate - fitted_rate;
-		estimator.residual_sum_sq += residual * residual;
-		estimator.output_sum_sq += measured_rate * measured_rate;
-		estimator.output_sum += measured_rate;
-		estimator.fit_sample_count++;
-	}
+	const float cosine = cosf(phase);
+	const float sine = sinf(phase);
+	estimator.sum_cos += cosine;
+	estimator.sum_sin += sine;
+	estimator.sum_cos_sq += cosine * cosine;
+	estimator.sum_sin_sq += sine * sine;
+	estimator.sum_cos_sin += cosine * sine;
 
-	estimator.command_sum += delayed_torque;
-	estimator.command_sum_sq += delayed_torque * delayed_torque;
+	estimator.rate.sum += estimator.filtered_rate;
+	estimator.rate.sum_sq += estimator.filtered_rate * estimator.filtered_rate;
+	estimator.rate.sum_cos += estimator.filtered_rate * cosine;
+	estimator.rate.sum_sin += estimator.filtered_rate * sine;
+	estimator.control.sum += estimator.filtered_control;
+	estimator.control.sum_sq += estimator.filtered_control * estimator.filtered_control;
+	estimator.control.sum_cos += estimator.filtered_control * cosine;
+	estimator.control.sum_sin += estimator.filtered_control * sine;
 	estimator.airspeed_sum += true_airspeed;
-
-	estimator.dt_sum += dt;
+	estimator.accumulation_duration_s += dt;
 	estimator.sample_count++;
-	estimator.previous_filtered_rate = estimator.filtered_rate;
 }
 
 void FwGainDesign::finalize_estimate(Axis axis)
@@ -768,7 +716,8 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	const RateEstimator &estimator = _estimator[axis_index];
 	const float min_samples = static_cast<float>(_param_fw_gd_est_min.get());
 
-	if (!estimator.initialized || estimator.sample_count < min_samples || estimator.fit_sample_count == 0) {
+	if (!estimator.initialized || estimator.sample_count < min_samples
+	    || estimator.accumulation_duration_s * _excitation_frequency < 2.f) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INSUFFICIENT_SAMPLES;
 		return;
 	}
@@ -784,22 +733,60 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	const float control_range[AXIS_COUNT] = {
 		_param_fw_gd_r_max.get(), _param_fw_gd_p_max.get(), _param_fw_gd_y_max.get()
 	};
+	HarmonicFit rate_fit{};
+	HarmonicFit control_fit{};
+
+	if (!fit_harmonic(estimator, estimator.rate, rate_fit)
+	    || !fit_harmonic(estimator, estimator.control, control_fit)) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_INPUT;
+		return;
+	}
+
+	const float excitation_frequency = _excitation_frequency;
+	const float input_delay = _param_fw_gd_est_dly.get();
+	const float omega = 2.f * M_PI_F * excitation_frequency;
+	const float control_amplitude = sqrtf(control_fit.cosine * control_fit.cosine + control_fit.sine * control_fit.sine);
+	const float complex_control_real = control_fit.cosine;
+	const float complex_control_imag = -control_fit.sine;
+	const float complex_rate_real = rate_fit.cosine;
+	const float complex_rate_imag = -rate_fit.sine;
+	const float control_power = complex_control_real * complex_control_real + complex_control_imag * complex_control_imag;
+
+	if (!PX4_ISFINITE(excitation_frequency) || excitation_frequency <= 0.f || !PX4_ISFINITE(input_delay)
+	    || input_delay < 0.f || !PX4_ISFINITE(control_amplitude) || control_amplitude < 0.01f
+	    || !PX4_ISFINITE(control_power) || control_power <= FLT_EPSILON) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_LOW_EXCITATION;
+		return;
+	}
+
+	const float response_real = (complex_rate_real * complex_control_real
+				     + complex_rate_imag * complex_control_imag) / control_power;
+	const float response_imag = (complex_rate_imag * complex_control_real
+				     - complex_rate_real * complex_control_imag) / control_power;
+	const float delay_phase = omega * input_delay;
+	const float corrected_response_real = response_real * cosf(delay_phase) - response_imag * sinf(delay_phase);
+	const float corrected_response_imag = response_real * sinf(delay_phase) + response_imag * cosf(delay_phase);
+	const float response_power = corrected_response_real * corrected_response_real
+				     + corrected_response_imag * corrected_response_imag;
+
+	if (!PX4_ISFINITE(response_power) || response_power <= FLT_EPSILON) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_INPUT;
+		return;
+	}
+
+	const float inverse_response_real = corrected_response_real / response_power;
+	const float inverse_response_imag = -corrected_response_imag / response_power;
+
+	if (!PX4_ISFINITE(inverse_response_imag) || fabsf(inverse_response_imag) <= FLT_EPSILON) {
+		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_LOW_EXCITATION;
+		return;
+	}
+
+	const float rate_b = omega / inverse_response_imag;
+	const float rate_a = -rate_b * inverse_response_real;
 	const float airspeed = estimator.airspeed_sum / estimator.sample_count;
-	const float mean_dt = estimator.dt_sum / estimator.sample_count;
-	const float discrete_a = estimator.theta[0];
-	const float discrete_b = estimator.theta[1];
-	const float rate_a = PX4_ISFINITE(discrete_a) && discrete_a > FLT_EPSILON
-			     && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? logf(discrete_a) / mean_dt : NAN;
-	const float rate_b = PX4_ISFINITE(rate_a) && PX4_ISFINITE(discrete_b)
-			     ? (fabsf(discrete_a - 1.f) > 1e-3f ? rate_a * discrete_b / (discrete_a - 1.f)
-				: discrete_b / mean_dt) : NAN;
 	const float length = reference_length[axis_index];
-	const float command_mean = estimator.command_sum / estimator.sample_count;
-	const float command_variance = estimator.command_sum_sq / estimator.sample_count - command_mean * command_mean;
-	const float output_mean = estimator.output_sum / estimator.fit_sample_count;
-	const float output_variance = fmaxf(estimator.output_sum_sq / estimator.fit_sample_count - output_mean * output_mean, 0.f);
-	const float fit_denominator = sqrtf(output_variance);
-	const float fit = sqrtf(estimator.residual_sum_sq / estimator.fit_sample_count) / fmaxf(fit_denominator, 0.005f);
+	const float fit = fmaxf(rate_fit.residual_ratio, control_fit.residual_ratio);
 
 	// Publish candidates even when rejected so the flight log tells the operator
 	// why a result failed. Only identification_valid permits their use as a
@@ -807,6 +794,7 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	_identified_airspeed[axis_index] = airspeed;
 	_identified_rate_a[axis_index] = rate_a;
 	_identified_rate_b[axis_index] = rate_b;
+	_identification_fit[axis_index] = fit;
 	if (!PX4_ISFINITE(rho) || !PX4_ISFINITE(sref) || !PX4_ISFINITE(length) || !PX4_ISFINITE(inertia[axis_index])
 	    || !PX4_ISFINITE(control_range[axis_index]) || !PX4_ISFINITE(airspeed) || !PX4_ISFINITE(rate_a)
 	    || !PX4_ISFINITE(rate_b) || !PX4_ISFINITE(fit) || rho <= 0.f || sref <= 0.f || length <= 0.f
@@ -822,11 +810,6 @@ void FwGainDesign::finalize_estimate(Axis axis)
 
 	if (rate_b <= 0.f) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_CONTROL_DIRECTION;
-		return;
-	}
-
-	if (command_variance < 1e-4f) {
-		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_LOW_EXCITATION;
 		return;
 	}
 
@@ -1043,7 +1026,7 @@ void FwGainDesign::update_flight_test()
 		const bool input_valid = control_surface_input(_excitation_axis, control_input);
 
 		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid) {
-			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], control_input, true_airspeed, dt);
+			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], control_input, true_airspeed, dt, phase, elapsed);
 		}
 	}
 
@@ -1066,17 +1049,7 @@ void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
 		design.identified_control_derivative[axis] = _identified_control_derivative[axis];
 		design.identification_valid[axis] = _identified_valid[axis];
 
-		if (_estimator[axis].fit_sample_count > 0) {
-			const float output_mean = _estimator[axis].output_sum / _estimator[axis].fit_sample_count;
-			const float output_variance = fmaxf(_estimator[axis].output_sum_sq / _estimator[axis].fit_sample_count
-									 - output_mean * output_mean, 0.f);
-			const float rms_output = sqrtf(output_variance);
-			design.identification_fit[axis] = sqrtf(_estimator[axis].residual_sum_sq / _estimator[axis].fit_sample_count)
-								   / fmaxf(rms_output, 0.005f);
-
-		} else {
-			design.identification_fit[axis] = NAN;
-		}
+		design.identification_fit[axis] = _identification_fit[axis];
 
 		design.identification_reject_reason[axis] = _identification_reject_reason[axis];
 	}
