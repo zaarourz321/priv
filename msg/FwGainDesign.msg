@@ -8,6 +8,10 @@ uint16 speed_count                       # total number of speed points in this 
 
 float32 airspeed                         # true airspeed for this model point [m/s]
 float32 px4_airspeed                     # equivalent/calibrated airspeed used for PX4 scaling [m/s]
+float32 air_density                       # density used by this design and identification conversion [kg/m^3]
+uint8 air_density_source                  # actual source selected for this sample
+uint8 DENSITY_SOURCE_MANUAL = 0
+uint8 DENSITY_SOURCE_BAROMETER = 1
 
 # Estimated open-loop rate-mode bandwidths, derived from the aerodynamic
 # damping derivatives. The axes are roll, pitch, yaw. [rad/s]

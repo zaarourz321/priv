@@ -260,8 +260,14 @@ bandwidth separation: `attitude_p = attitude_bandwidth_ratio * rate_bw`, and
 `FW_R_TC` or `FW_P_TC = 1 / attitude_p`. A 0.2 to 0.3 outer-to-inner ratio is a
 conservative starting range.
 
-The schedule input is true airspeed and uses `FW_GD_RHO` in the aerodynamic
-model. `px4_airspeed` reports the matching ISA equivalent/calibrated speed
+The schedule input is true airspeed. By default, `FW_GD_RHO_SRC = 1` uses the
+selected barometer's measured density (`vehicle_air_data.rho`) in both the
+aerodynamic model and flight-identification derivative conversion. It is
+calculated automatically from pressure and temperature. `FW_GD_RHO_SRC = 0`
+uses the manual `FW_GD_RHO` value; automatic mode falls back to that value if
+barometric air data becomes unavailable. `air_density` and
+`air_density_source` in `fw_gain_design` show the density actually used.
+`px4_airspeed` reports the matching ISA equivalent/calibrated speed
 (`TAS * sqrt(rho / 1.225)`) used for PX4's airspeed scaling.
 
 `surface_rate_*` are direct physical surface-command gains. `px4_rate_*` are

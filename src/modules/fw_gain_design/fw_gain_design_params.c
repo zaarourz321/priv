@@ -82,12 +82,10 @@ PARAM_DEFINE_FLOAT(FW_GD_VMAX, 25.0f);
 PARAM_DEFINE_FLOAT(FW_GD_VSTEP, 1.0f);
 
 /**
- * Air density used by the linear model
+ * Manual air-density fallback
  *
- * Use the density representative of the schedule altitude. The supplied
- * aerodynamic coefficients are assumed to be non-dimensional. The module
- * also publishes the corresponding ISA calibrated/equivalent airspeed used
- * when it calculates PX4 airspeed-scaled gain equivalents.
+ * Used when FW_GD_RHO_SRC is Manual or when automatic barometric density is
+ * unavailable. The supplied aerodynamic coefficients are non-dimensional.
  *
  * @min 0.1
  * @max 1.5
@@ -96,6 +94,22 @@ PARAM_DEFINE_FLOAT(FW_GD_VSTEP, 1.0f);
  * @group FW Gain Design
  */
 PARAM_DEFINE_FLOAT(FW_GD_RHO, 1.225f);
+
+/**
+ * Air-density source
+ *
+ * Selects the density used for model conversion and gain design. Automatic
+ * mode uses the selected barometer's vehicle_air_data.rho value, calculated
+ * from measured static pressure and temperature. It falls back to FW_GD_RHO
+ * only when that measurement is stale or invalid.
+ *
+ * @value 0 Manual FW_GD_RHO
+ * @value 1 Automatic barometer density
+ * @min 0
+ * @max 1
+ * @group FW Gain Design
+ */
+PARAM_DEFINE_INT32(FW_GD_RHO_SRC, 1);
 
 /**
  * Reference wing area

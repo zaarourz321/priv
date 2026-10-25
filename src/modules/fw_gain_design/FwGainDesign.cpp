@@ -192,8 +192,9 @@ bool FwGainDesign::control_surface_input(Axis axis, float &control_input) const
 
 uint8_t FwGainDesign::validate_common_inputs() const
 {
+	bool barometric_source = false;
 	const float values[] = {
-		_param_fw_gd_rho.get(), _param_fw_gd_sref.get()
+		selected_air_density(barometric_source), _param_fw_gd_sref.get()
 	};
 
 	for (float value : values) {
@@ -203,6 +204,25 @@ uint8_t FwGainDesign::validate_common_inputs() const
 	}
 
 	return fw_gain_design_s::AXIS_STATUS_VALID;
+}
+
+float FwGainDesign::selected_air_density(bool &barometric_source) const
+{
+	barometric_source = false;
+
+	if (_param_fw_gd_rho_src.get() != 0) {
+		const vehicle_air_data_s &air_data = _vehicle_air_data_sub.get();
+
+		if (air_data.timestamp != 0 && hrt_elapsed_time(&air_data.timestamp) <= 1_s
+		    && PX4_ISFINITE(air_data.rho) && air_data.rho > 0.f) {
+			barometric_source = true;
+			return air_data.rho;
+		}
+	}
+
+	// Preserve a deterministic manual fallback when barometric air data is not
+	// available, for example during early boot or a HIL sensor dropout.
+	return _param_fw_gd_rho.get();
 }
 
 void FwGainDesign::reset_schedule()
@@ -259,6 +279,8 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 {
 	design.airspeed = true_airspeed;
 	design.px4_airspeed = NAN;
+	design.air_density = NAN;
+	design.air_density_source = fw_gain_design_s::DENSITY_SOURCE_MANUAL;
 
 	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
 		design.aircraft_rate_bw[axis] = NAN;
@@ -287,7 +309,11 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 	const uint8_t common_input_status = validate_common_inputs();
 
 	if (common_input_status == fw_gain_design_s::AXIS_STATUS_VALID) {
-		const float rho = _param_fw_gd_rho.get();
+		bool barometric_density = false;
+		const float rho = selected_air_density(barometric_density);
+		design.air_density = rho;
+		design.air_density_source = barometric_density ? fw_gain_design_s::DENSITY_SOURCE_BAROMETER
+								: fw_gain_design_s::DENSITY_SOURCE_MANUAL;
 		const float sref = _param_fw_gd_sref.get();
 		const float bref = _param_fw_gd_bref.get();
 		const float cref = _param_fw_gd_cref.get();
@@ -831,7 +857,8 @@ void FwGainDesign::finalize_estimate(Axis axis)
 		return;
 	}
 
-	const float rho = _param_fw_gd_rho.get();
+	bool barometric_density = false;
+	const float rho = selected_air_density(barometric_density);
 	const float sref = _param_fw_gd_sref.get();
 	const float reference_length[AXIS_COUNT] = {
 		_param_fw_gd_bref.get(), _param_fw_gd_cref.get(), _param_fw_gd_bref.get()
@@ -1094,7 +1121,8 @@ void FwGainDesign::finalize_coupled_estimate(Axis axis)
 								fmaxf(airflow_fit[0].residual_ratio, airflow_fit[1].residual_ratio))));
 	const float airspeed = (low_frequency.airspeed_sum + high_frequency.airspeed_sum)
 			       / static_cast<float>(low_frequency.sample_count + high_frequency.sample_count);
-	const float rho = _param_fw_gd_rho.get();
+	bool barometric_density = false;
+	const float rho = selected_air_density(barometric_density);
 	const float sref = _param_fw_gd_sref.get();
 	const float reference_length = pitch_axis ? _param_fw_gd_cref.get() : _param_fw_gd_bref.get();
 	const float inertia = pitch_axis ? _param_fw_gd_iy.get() : _param_fw_gd_iz.get();
@@ -1765,6 +1793,8 @@ void FwGainDesign::Run()
 		update_control_surface_mapping();
 		reset_schedule();
 	}
+
+	_vehicle_air_data_sub.update();
 
 	// The SD card may mount after this module starts. Retry quietly while the
 	// opt-in persistence setting is enabled, but never overwrite parameters or

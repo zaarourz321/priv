@@ -63,6 +63,7 @@
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/vehicle_attitude.h>
+#include <uORB/topics/vehicle_air_data.h>
 #include <uORB/topics/vehicle_control_mode.h>
 #include <uORB/topics/vehicle_land_detected.h>
 #include <uORB/topics/vehicle_local_position.h>
@@ -120,6 +121,7 @@ private:
 	bool apply_parameter(param_t parameter, float value, bool restore);
 	bool apply_enabled(Axis axis) const;
 	bool capture_axis_baseline(Axis axis);
+	float selected_air_density(bool &barometric_source) const;
 	uint8_t validate_common_inputs() const;
 
 	struct HarmonicSignal {
@@ -184,6 +186,7 @@ private:
 
 	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 	uORB::SubscriptionData<airspeed_validated_s> _airspeed_validated_sub{ORB_ID(airspeed_validated)};
+	uORB::SubscriptionData<vehicle_air_data_s> _vehicle_air_data_sub{ORB_ID(vehicle_air_data)};
 	uORB::SubscriptionData<actuator_armed_s> _actuator_armed_sub{ORB_ID(actuator_armed)};
 	uORB::SubscriptionData<actuator_servos_s> _actuator_servos_sub{ORB_ID(actuator_servos)};
 	uORB::SubscriptionData<vehicle_angular_velocity_s> _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
@@ -264,6 +267,7 @@ private:
 		(ParamFloat<px4::params::FW_GD_VMAX>) _param_fw_gd_vmax,
 		(ParamFloat<px4::params::FW_GD_VSTEP>) _param_fw_gd_vstep,
 		(ParamFloat<px4::params::FW_GD_RHO>) _param_fw_gd_rho,
+		(ParamInt<px4::params::FW_GD_RHO_SRC>) _param_fw_gd_rho_src,
 		(ParamFloat<px4::params::FW_GD_SREF>) _param_fw_gd_sref,
 		(ParamFloat<px4::params::FW_GD_BREF>) _param_fw_gd_bref,
 		(ParamFloat<px4::params::FW_GD_CREF>) _param_fw_gd_cref,
