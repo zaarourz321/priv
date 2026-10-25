@@ -143,12 +143,15 @@ air-relative NED velocity, the EKF wind estimate when available, and vehicle
 attitude, then estimates both state equations:
 
 ```
-q[k] = A_alpha * alpha[k-1] + A_q * q[k-1] + B * command[k-delay] + bias
+q_dot = M_alpha * alpha[k-1] + M_q * q[k-1] + M_delta * command[k-delay] + bias
 alpha[k] = Z_alpha * alpha[k-1] + Z_q * q[k-1] + Z_delta * command[k-delay] + bias
 ```
 
-This separates the `Cm_alpha` contribution from `Cmq` and gives an independent
-alpha-state fit. Both the rate and alpha/beta residuals must pass validation.
+The pitch-moment equation is fitted directly in continuous time from filtered
+states. This avoids using a separate Euler conversion for the entries of a
+coupled alpha/q discrete transition matrix, which otherwise mixes `Cm_alpha`
+into `Cmq`. The alpha equation remains a separate discrete fit and validates
+the measured airflow state. Both residuals must pass validation.
 For the conventional fixed-wing pitch model, a non-negative `Cm_alpha` is
 rejected as physically invalid rather than treated as a usable identified
 model. It publishes the mean identified alpha,

@@ -133,9 +133,9 @@ private:
 
 	struct RateEstimator {
 		// Regular axes use rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
-		// Pitch uses the alpha/q short-period state and the lateral model uses
-		// beta/p/r. The target rate is still fitted directly, avoiding noisy raw
-		// angular acceleration. A second fit models alpha or beta evolution.
+		// Pitch directly fits q_dot = M_alpha * alpha + M_q * q + M_delta * delta
+		// from equally filtered states. This avoids discrete-to-continuous coupling
+		// bias between Cmalpha and Cmq. The lateral model uses beta/p/r.
 		float theta[kMaxModelOrder] {};
 		float covariance[kMaxModelOrder][kMaxModelOrder] {};
 		float airflow_theta[kMaxModelOrder] {};

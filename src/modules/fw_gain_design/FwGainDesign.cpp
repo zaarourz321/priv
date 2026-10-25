@@ -972,7 +972,11 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 	estimator.torque_history_index = static_cast<uint8_t>((estimator.torque_history_index + 1U) % kTorqueHistoryLength);
 
 	// Regular axes: rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
-	// Pitch: q[k] = A_alpha * alpha[k-1] + A_q * q[k-1] + B * command[k-delay] + offset.
+	// Pitch: q_dot = M_alpha * alpha[k-1] + M_q * q[k-1]
+	//                + M_delta * command[k-delay] + offset.
+	// Fitting pitch directly in continuous time is important: interpreting the
+	// elements of a discrete coupled alpha/q transition matrix independently
+	// with Euler conversion leaks M_alpha into M_q and biases both Cmalpha/Cmq.
 	// Lateral: p/r[k] = A_beta * beta[k-1] + A_self * p/r[k-1]
 	// + A_cross * r/p[k-1] + B * command[k-delay] + offset.
 	// The offset makes trim torque and slow navigation corrections harmless.
@@ -998,7 +1002,9 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 		phi[2] = 1.f;
 	}
 
-	const float measured_rate = estimator.filtered_rate;
+	const float measured_rate = use_pitch_short_period
+				    ? (estimator.filtered_rate - estimator.previous_filtered_rate) / dt
+				    : estimator.filtered_rate;
 
 	const float forgetting_factor = math::constrain(1.f - dt / time_constant, 0.95f, 0.9999f);
 	float fitted_rate = 0.f;
@@ -1044,9 +1050,8 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 		}
 	}
 
-	// Do not grade the intentional RLS convergence transient. The score below
-	// is a post-update, low-frequency rate-model residual, not raw gyro
-	// acceleration noise.
+	// Do not grade the intentional RLS convergence transient. Pitch grades the
+	// filtered q-dot residual; other axes grade their low-frequency rate model.
 	if (estimator.sample_count >= kEstimatorWarmupSamples) {
 		const float residual = measured_rate - fitted_rate;
 		estimator.residual_sum_sq += residual * residual;
@@ -1101,17 +1106,19 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	const bool use_lateral_coupling = estimator.lateral_coupled;
 	const float airspeed = estimator.airspeed_sum / estimator.sample_count;
 	const float mean_dt = estimator.dt_sum / estimator.sample_count;
-	const float discrete_a = use_lateral_coupling ? estimator.theta[1] : (use_pitch_short_period ? estimator.theta[1] : estimator.theta[0]);
-	const float discrete_b = use_lateral_coupling ? estimator.theta[3] : (use_pitch_short_period ? estimator.theta[2] : estimator.theta[1]);
-	const float rate_a = (use_pitch_short_period || use_lateral_coupling)
-			? (PX4_ISFINITE(discrete_a) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? (discrete_a - 1.f) / mean_dt : NAN)
+	const float discrete_a = use_lateral_coupling ? estimator.theta[1] : (use_pitch_short_period ? NAN : estimator.theta[0]);
+	const float discrete_b = use_lateral_coupling ? estimator.theta[3] : (use_pitch_short_period ? NAN : estimator.theta[1]);
+	const float rate_a = use_pitch_short_period ? estimator.theta[1]
+			: (use_lateral_coupling
+			   ? (PX4_ISFINITE(discrete_a) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? (discrete_a - 1.f) / mean_dt : NAN)
 			: (PX4_ISFINITE(discrete_a) && discrete_a > FLT_EPSILON && PX4_ISFINITE(mean_dt) && mean_dt > 0.f
-			   ? logf(discrete_a) / mean_dt : NAN);
-	const float rate_b = (use_pitch_short_period || use_lateral_coupling)
-			? (PX4_ISFINITE(discrete_b) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? discrete_b / mean_dt : NAN)
+			   ? logf(discrete_a) / mean_dt : NAN));
+	const float rate_b = use_pitch_short_period ? estimator.theta[2]
+			: (use_lateral_coupling
+			   ? (PX4_ISFINITE(discrete_b) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? discrete_b / mean_dt : NAN)
 			: (PX4_ISFINITE(rate_a) && PX4_ISFINITE(discrete_b)
-			   ? (fabsf(discrete_a - 1.f) > 1e-3f ? rate_a * discrete_b / (discrete_a - 1.f) : discrete_b / mean_dt) : NAN);
-	const float rate_alpha = use_pitch_short_period && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? estimator.theta[0] / mean_dt : NAN;
+			   ? (fabsf(discrete_a - 1.f) > 1e-3f ? rate_a * discrete_b / (discrete_a - 1.f) : discrete_b / mean_dt) : NAN));
+	const float rate_alpha = use_pitch_short_period ? estimator.theta[0] : NAN;
 	const float rate_beta = use_lateral_coupling && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? estimator.theta[0] / mean_dt : NAN;
 	const float rate_cross = use_lateral_coupling && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? estimator.theta[2] / mean_dt : NAN;
 	const float airflow_rate_a = (use_pitch_short_period || use_lateral_coupling) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f
@@ -1351,7 +1358,7 @@ void FwGainDesign::update_flight_test()
 	_actuator_servos_sub.update();
 	_vehicle_attitude_sub.update();
 	_vehicle_torque_setpoint_sub.update();
-	_vehicle_local_position_sub.update();
+	const bool local_position_updated = _vehicle_local_position_sub.update();
 	_vehicle_status_sub.update();
 	_vehicle_control_mode_sub.update();
 	_vehicle_land_detected_sub.update();
@@ -1494,8 +1501,16 @@ void FwGainDesign::update_flight_test()
 		float cross_rate = NAN;
 		const bool use_airflow_model = _estimator[_excitation_axis].pitch_short_period
 					       || _estimator[_excitation_axis].lateral_coupled;
+		const bool pitch_alpha_sample_current = _excitation_axis != PITCH
+						       || !_estimator[PITCH].pitch_short_period
+						       || (local_position_updated
+							   && hrt_elapsed_time(&_vehicle_local_position_sub.get().timestamp) < 40_ms);
 
-		if (use_airflow_model && !estimate_airflow_angles(angle_of_attack, sideslip)) {
+		// q and alpha must describe the same instant. Reusing a local-position
+		// alpha sample for several new gyro samples creates a phase error that is
+		// fitted as Mq/Cmq or Malpha/Cmalpha. For pitch, consume alpha only on a
+		// fresh local-position sample; retain the usual lateral behavior.
+		if (use_airflow_model && pitch_alpha_sample_current && !estimate_airflow_angles(angle_of_attack, sideslip)) {
 			abort_excitation(fw_gain_design_s::EXCITATION_ABORT_FLIGHT_CONDITIONS);
 			return;
 		}
@@ -1511,7 +1526,7 @@ void FwGainDesign::update_flight_test()
 					 ? hrt_elapsed_time(&torque_setpoint.timestamp) < 100_ms
 					 : pitch_surface_input(control_input);
 
-		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid) {
+		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid && pitch_alpha_sample_current) {
 			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], cross_rate,
 					 control_input, angle_of_attack, sideslip, true_airspeed, dt);
 
@@ -1525,7 +1540,13 @@ void FwGainDesign::update_flight_test()
 		}
 	}
 
-	_last_estimator_sample = angular_velocity.timestamp_sample;
+	// The pitch model advances only with its fresh alpha input. Preserve the
+	// corresponding elapsed time instead of silently treating an old alpha as a
+	// new sample. For other models retain the gyro-driven update cadence.
+	if (_excitation_axis != PITCH || !_estimator[PITCH].pitch_short_period
+	    || local_position_updated || _last_estimator_sample == 0) {
+		_last_estimator_sample = angular_velocity.timestamp_sample;
+	}
 }
 
 void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
