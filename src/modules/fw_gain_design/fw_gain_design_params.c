@@ -500,6 +500,22 @@ PARAM_DEFINE_FLOAT(FW_GD_EXC_AMP, 4.0f);
 PARAM_DEFINE_FLOAT(FW_GD_EXC_FREQ, 0.7f);
 
 /**
+ * Pitch identification second-frequency ratio
+ *
+ * A pitch test uses two sequential, never simultaneous, sine tests. The
+ * first uses FW_GD_EXC_FREQ and the second uses this ratio times that
+ * frequency. The two independent responses make the alpha/q/elevator
+ * short-period model observable, avoiding the Cmq bias of a one-state fit.
+ *
+ * @min 1.2
+ * @max 3.0
+ * @decimal 2
+ * @increment 0.1
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_P_FRAT, 1.8f);
+
+/**
  * Flight-test excitation duration
  *
  * Length of an explicitly started excitation. The command is removed on

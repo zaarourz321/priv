@@ -73,13 +73,30 @@ influence a gain design.
 
 ## Flight-test excitation and identification
 
-The module identifies the single-axis rate plant used by this gain designer:
+Roll and yaw identify the single-axis rate plants used by this gain designer:
 
 ```
 p_dot = L_p * p + L_delta * u_roll + bias
-q_dot = M_q * q + M_delta * u_pitch + bias
 r_dot = N_r * r + N_delta * u_yaw + bias
 ```
+
+Pitch is deliberately different. A pitch motion contains both angle of attack
+and pitch-rate dynamics, so treating it as a one-state `q/elevator` plant can
+fold `Cm_alpha` into `Cm_q`. A pitch test instead identifies the physical
+short-period equation:
+
+```
+q_dot = M_alpha * alpha + M_q * q + M_delta * u_elevator + bias
+```
+
+It runs two **sequential** single-frequency sine tests: first
+`FW_GD_EXC_FREQ`, then `FW_GD_EXC_FREQ * FW_GD_P_FRAT`. There is never a
+simultaneous multi-sine command. Between the two tests the command ramps back
+to zero; samples are taken only after settling and before each ramp-out. The
+module obtains `alpha` from the EKF local velocity rotated into body axes and
+subtracts a fresh EKF wind estimate when available. A zero-wind fallback is
+provided for HIL, but a valid wind estimate is recommended for real-flight
+physical `Cm_alpha` accuracy.
 
 During a test it adds one small, zero-mean, single-frequency sinusoidal
 **body-rate setpoint** to the normal fixed-wing attitude controller. It never
@@ -106,13 +123,16 @@ open-loop rate-to-surface response:
 H(jω) = rate(jω) / surface_command(jω)
 ```
 
-For the first-order plant `H(jω) = b / (jω - a)`, the inverse response gives
-`a` and `b` directly. `FW_GD_EST_FC` is the filter cutoff and `FW_GD_EST_DLY`
-compensates the command-to-response delay as a phase shift. The defaults are
-2 Hz and zero delay, appropriate for HIL or direct surface-command models. On
-real hardware, enter a measured non-zero servo transport delay. At the end of
-a qualifying test, the module converts the result at the
-mean tested true airspeed into the normal physical derivatives:
+For roll and yaw, the first-order plant `H(jω) = b / (jω - a)` gives `a` and
+`b` directly from the inverse response. Pitch solves the two measured complex
+short-period equations for `M_alpha`, `M_q`, and `M_delta`; it publishes the
+additional diagnostic `identified_pitch_cm_alpha`. `FW_GD_EST_FC` is the
+filter cutoff and `FW_GD_EST_DLY` compensates the command-to-response delay as
+a phase shift. The defaults are 2 Hz and zero delay, appropriate for HIL or
+direct surface-command models. On real hardware, enter a measured non-zero
+servo transport delay. At the end of a qualifying test, the module converts
+the result at the mean tested true airspeed into the normal physical
+derivatives:
 
 ```
 Cl_p/Cm_q/Cn_r = 4 I a / (rho V S L^2)
@@ -151,8 +171,10 @@ identification.
 4. Check `listener fw_gain_design 1`. A usable result has
     `excitation_state = COMPLETE`, a non-zero `identification_sample_count`,
     `identification_valid[axis] = true`, negative identified damping, positive
-    identified control derivative, and a small `identification_fit` (the worse
-    normalized harmonic residual of rate and surface command; lower is better).
+    identified control derivative, and a small `identification_fit`. For pitch,
+    also confirm `identified_pitch_cm_alpha` is finite and negative. The pitch
+    fit includes the two harmonic fits and the short-period equation residual;
+    lower is better.
     If a result is rejected, inspect
     `identification_reject_reason[axis]` and the published candidate values;
     candidates are diagnostic only until `identification_valid` is true.
