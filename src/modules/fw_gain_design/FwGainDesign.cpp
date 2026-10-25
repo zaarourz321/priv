@@ -542,7 +542,7 @@ bool FwGainDesign::load_model_from_sd()
 	}
 
 	if ((model.valid_mask & (1U << YAW)) != 0
-	    && (!PX4_ISFINITE(model.yaw_cn_beta) || model.yaw_cn_beta <= 0.f)) {
+	    && !PX4_ISFINITE(model.yaw_cn_beta)) {
 		return false;
 	}
 
@@ -1139,8 +1139,7 @@ void FwGainDesign::finalize_coupled_estimate(Axis axis)
 		return;
 	}
 
-	if ((pitch_axis && static_derivative >= 0.f) || (!pitch_axis && static_derivative <= 0.f)
-	    || damping_derivative >= 0.f || control_derivative <= 0.f) {
+	if ((pitch_axis && static_derivative >= 0.f) || damping_derivative >= 0.f || control_derivative <= 0.f) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_DERIVATIVE;
 		return;
 	}

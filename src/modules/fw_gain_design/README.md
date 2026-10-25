@@ -177,7 +177,8 @@ identification.
     `identification_valid[axis] = true`, negative identified damping, positive
     identified control derivative, and a small `identification_fit`. For pitch,
     confirm `identified_pitch_cm_alpha` is finite and negative; for yaw,
-    confirm `identified_yaw_cn_beta` is finite and positive. Coupled fits
+    inspect `identified_yaw_cn_beta` as a diagnostic because its sign depends
+    on the configured sideslip convention. Coupled fits
     include the two harmonic fits and the state-equation residual; lower is
     better.
     If a result is rejected, inspect
