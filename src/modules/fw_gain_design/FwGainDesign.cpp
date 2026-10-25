@@ -1196,7 +1196,10 @@ bool FwGainDesign::estimate_airflow_angle(Axis axis, float &airflow_angle) const
 		return false;
 	}
 
-	airflow_angle = axis == PITCH ? atan2f(-airspeed_body(2), airspeed_body(0))
+	// PX4 uses forward-right-down body coordinates. In that frame positive body
+	// vertical airspeed is positive angle of attack; negating it would invert
+	// the identified Cm_alpha sign.
+	airflow_angle = axis == PITCH ? atan2f(airspeed_body(2), airspeed_body(0))
 					  : atan2f(airspeed_body(1), sqrtf(airspeed_body(0) * airspeed_body(0)
 										  + airspeed_body(2) * airspeed_body(2)));
 	return PX4_ISFINITE(airflow_angle) && fabsf(airflow_angle) < math::radians(30.f);
