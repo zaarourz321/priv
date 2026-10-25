@@ -52,7 +52,7 @@ namespace
 constexpr char kSdModelPath[] = "/fs/microsd/fw_gain_design_model.bin";
 constexpr char kSdModelTemporaryPath[] = "/fs/microsd/fw_gain_design_model.tmp";
 constexpr uint32_t kSdModelMagic = 0x46574744U; // "FWGD"
-constexpr uint16_t kSdModelVersion = 1;
+constexpr uint16_t kSdModelVersion = 2;
 }
 
 FwGainDesign::FwGainDesign() :
@@ -259,12 +259,6 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 {
 	design.airspeed = true_airspeed;
 	design.px4_airspeed = NAN;
-	design.manual_static_derivative[ROLL] = _param_fw_gd_clb.get();
-	design.manual_static_derivative[PITCH] = _param_fw_gd_cma.get();
-	design.manual_static_derivative[YAW] = _param_fw_gd_cnb.get();
-	design.manual_cross_rate_derivative[ROLL] = _param_fw_gd_clr.get();
-	design.manual_cross_rate_derivative[PITCH] = NAN;
-	design.manual_cross_rate_derivative[YAW] = _param_fw_gd_cnp.get();
 
 	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
 		design.aircraft_rate_bw[axis] = NAN;
@@ -369,9 +363,7 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 				continue;
 			}
 
-			// The design is intentionally restricted to a stable, decoupled rate
-			// mode. A coupled Dutch-roll or short-period model must first be reduced
-			// to a valid SISO equivalent before these gains are meaningful.
+			// The design requires a stable first-order rate plant.
 			if (rate_a >= 0.f) {
 				design.axis_status[axis] = fw_gain_design_s::AXIS_STATUS_NOT_DAMPED;
 				continue;
@@ -476,18 +468,11 @@ void FwGainDesign::reset_estimator(Axis axis)
 	RateEstimator &estimator = _estimator[static_cast<uint8_t>(axis)];
 	estimator = {};
 
-	estimator.pitch_short_period = false;
-	estimator.lateral_coupled = false;
 	const uint8_t model_order = 3;
-	const uint8_t airflow_model_order = 0;
 
 	// Large diagonal covariance permits convergence from no a-priori estimate.
 	for (uint8_t i = 0; i < model_order; ++i) {
 		estimator.covariance[i][i] = 1e3f;
-	}
-
-	for (uint8_t i = 0; i < airflow_model_order; ++i) {
-		estimator.airflow_covariance[i][i] = 1e3f;
 	}
 
 	estimator.initialized = true;
@@ -497,21 +482,6 @@ void FwGainDesign::reset_estimator(Axis axis)
 	_identified_rate_a[static_cast<uint8_t>(axis)] = NAN;
 	_identified_rate_b[static_cast<uint8_t>(axis)] = NAN;
 	_identified_airspeed[static_cast<uint8_t>(axis)] = NAN;
-	_identified_static_derivative[static_cast<uint8_t>(axis)] = NAN;
-	_identified_cross_rate_derivative[static_cast<uint8_t>(axis)] = NAN;
-	_identified_airflow_angle[static_cast<uint8_t>(axis)] = NAN;
-	_identified_airflow_rate_a[static_cast<uint8_t>(axis)] = NAN;
-	_identified_airflow_rate_b[static_cast<uint8_t>(axis)] = NAN;
-	_identified_airflow_control_b[static_cast<uint8_t>(axis)] = NAN;
-	_identification_airflow_fit[static_cast<uint8_t>(axis)] = NAN;
-	_identified_coupled_model[static_cast<uint8_t>(axis)] = false;
-
-	if (axis == PITCH) {
-		_identified_pitch_cm_alpha = NAN;
-		_identified_pitch_angle_of_attack = NAN;
-		_identified_pitch_short_period = false;
-	}
-
 	_identification_reject_reason[static_cast<uint8_t>(axis)] = fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN;
 	_last_estimator_sample = 0;
 }
@@ -534,23 +504,12 @@ uint32_t FwGainDesign::model_checksum(const PersistentModel &model)
 	hash_bytes(&model.version, sizeof(model.version));
 	hash_bytes(&model.size, sizeof(model.size));
 	hash_bytes(&model.valid_mask, sizeof(model.valid_mask));
-	hash_bytes(&model.coupled_mask, sizeof(model.coupled_mask));
-	hash_bytes(&model.pitch_short_period, sizeof(model.pitch_short_period));
 	hash_bytes(&model.reserved, sizeof(model.reserved));
 	hash_bytes(model.damping_derivative, sizeof(model.damping_derivative));
 	hash_bytes(model.control_derivative, sizeof(model.control_derivative));
 	hash_bytes(model.rate_a, sizeof(model.rate_a));
 	hash_bytes(model.rate_b, sizeof(model.rate_b));
 	hash_bytes(model.airspeed, sizeof(model.airspeed));
-	hash_bytes(model.static_derivative, sizeof(model.static_derivative));
-	hash_bytes(model.cross_rate_derivative, sizeof(model.cross_rate_derivative));
-	hash_bytes(model.airflow_angle, sizeof(model.airflow_angle));
-	hash_bytes(model.airflow_rate_a, sizeof(model.airflow_rate_a));
-	hash_bytes(model.airflow_rate_b, sizeof(model.airflow_rate_b));
-	hash_bytes(model.airflow_control_b, sizeof(model.airflow_control_b));
-	hash_bytes(model.airflow_fit, sizeof(model.airflow_fit));
-	hash_bytes(&model.pitch_cm_alpha, sizeof(model.pitch_cm_alpha));
-	hash_bytes(&model.pitch_angle_of_attack, sizeof(model.pitch_angle_of_attack));
 
 	return checksum;
 }
@@ -592,15 +551,6 @@ bool FwGainDesign::load_model_from_sd()
 			_identified_rate_a[axis] = model.rate_a[axis];
 			_identified_rate_b[axis] = model.rate_b[axis];
 			_identified_airspeed[axis] = model.airspeed[axis];
-			_identified_static_derivative[axis] = model.static_derivative[axis];
-			_identified_cross_rate_derivative[axis] = model.cross_rate_derivative[axis];
-			_identified_airflow_angle[axis] = model.airflow_angle[axis];
-			_identified_airflow_rate_a[axis] = model.airflow_rate_a[axis];
-			_identified_airflow_rate_b[axis] = model.airflow_rate_b[axis];
-			_identified_airflow_control_b[axis] = model.airflow_control_b[axis];
-			_identification_airflow_fit[axis] = model.airflow_fit[axis];
-			_identified_coupled_model[axis] = (model.coupled_mask & axis_mask) != 0;
-
 		} else {
 			_identified_valid[axis] = false;
 			_identified_damping_derivative[axis] = NAN;
@@ -608,20 +558,9 @@ bool FwGainDesign::load_model_from_sd()
 			_identified_rate_a[axis] = NAN;
 			_identified_rate_b[axis] = NAN;
 			_identified_airspeed[axis] = NAN;
-			_identified_static_derivative[axis] = NAN;
-			_identified_cross_rate_derivative[axis] = NAN;
-			_identified_airflow_angle[axis] = NAN;
-			_identified_airflow_rate_a[axis] = NAN;
-			_identified_airflow_rate_b[axis] = NAN;
-			_identified_airflow_control_b[axis] = NAN;
-			_identification_airflow_fit[axis] = NAN;
-			_identified_coupled_model[axis] = false;
 		}
 	}
 
-	_identified_pitch_short_period = model.pitch_short_period != 0;
-	_identified_pitch_cm_alpha = model.pitch_cm_alpha;
-	_identified_pitch_angle_of_attack = model.pitch_angle_of_attack;
 	_sd_model_loaded = true;
 	_sd_model_dirty = false;
 	_calculation_id++;
@@ -639,9 +578,6 @@ bool FwGainDesign::save_model_to_sd()
 	model.magic = kSdModelMagic;
 	model.version = kSdModelVersion;
 	model.size = static_cast<uint16_t>(sizeof(PersistentModel));
-	model.pitch_short_period = _identified_pitch_short_period ? 1U : 0U;
-	model.pitch_cm_alpha = _identified_pitch_cm_alpha;
-	model.pitch_angle_of_attack = _identified_pitch_angle_of_attack;
 
 	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
 		if (!_identified_valid[axis]) {
@@ -650,19 +586,11 @@ bool FwGainDesign::save_model_to_sd()
 
 		const uint8_t axis_mask = 1U << axis;
 		model.valid_mask |= axis_mask;
-		model.coupled_mask |= _identified_coupled_model[axis] ? axis_mask : 0U;
 		model.damping_derivative[axis] = _identified_damping_derivative[axis];
 		model.control_derivative[axis] = _identified_control_derivative[axis];
 		model.rate_a[axis] = _identified_rate_a[axis];
 		model.rate_b[axis] = _identified_rate_b[axis];
 		model.airspeed[axis] = _identified_airspeed[axis];
-		model.static_derivative[axis] = _identified_static_derivative[axis];
-		model.cross_rate_derivative[axis] = _identified_cross_rate_derivative[axis];
-		model.airflow_angle[axis] = _identified_airflow_angle[axis];
-		model.airflow_rate_a[axis] = _identified_airflow_rate_a[axis];
-		model.airflow_rate_b[axis] = _identified_airflow_rate_b[axis];
-		model.airflow_control_b[axis] = _identified_airflow_control_b[axis];
-		model.airflow_fit[axis] = _identification_airflow_fit[axis];
 	}
 
 	if (model.valid_mask == 0) {
@@ -750,18 +678,14 @@ bool FwGainDesign::update_rls(float theta[kMaxModelOrder], float covariance[kMax
 	return PX4_ISFINITE(fitted_output);
 }
 
-void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, float control_input, float angle_of_attack,
-				    float sideslip, float true_airspeed, float dt)
+void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, float true_airspeed, float dt)
 {
 	const uint8_t axis_index = static_cast<uint8_t>(axis);
 	RateEstimator &estimator = _estimator[axis_index];
-	const bool use_pitch_short_period = estimator.pitch_short_period;
-	const bool use_lateral_coupling = estimator.lateral_coupled;
 
 	if (!estimator.initialized || !PX4_ISFINITE(rate) || !PX4_ISFINITE(control_input)
 	    || !PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f
-	    || !PX4_ISFINITE(dt) || dt <= 0.f || (use_pitch_short_period && !PX4_ISFINITE(angle_of_attack))
-	    || (use_lateral_coupling && (!PX4_ISFINITE(cross_rate) || !PX4_ISFINITE(sideslip)))) {
+	    || !PX4_ISFINITE(dt) || dt <= 0.f) {
 		return;
 	}
 
@@ -777,20 +701,13 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 	// The sensor's angular acceleration is intentionally not used here. At the
 	// low frequencies of an aircraft flight test it is derivative-noise
 	// dominated. Instead identify the equivalent discrete plant directly from
-	// equally filtered rate and physical control command. For pitch, alpha is a separate
-	// state so the short-period alpha coupling is not folded into Cmq.
+	// equally filtered rate and physical control command.
 	const float filter_time_constant = 1.f / (2.f * M_PI_F * filter_cutoff_hz);
 	const float filter_alpha = math::constrain(dt / (dt + filter_time_constant), 0.001f, 0.95f);
 
 	if (!estimator.filters_initialized) {
 		estimator.filtered_rate = rate;
 		estimator.previous_filtered_rate = rate;
-		estimator.filtered_cross_rate = cross_rate;
-		estimator.previous_filtered_cross_rate = cross_rate;
-		estimator.filtered_angle_of_attack = angle_of_attack;
-		estimator.previous_filtered_angle_of_attack = angle_of_attack;
-		estimator.filtered_sideslip = sideslip;
-		estimator.previous_filtered_sideslip = sideslip;
 		estimator.filtered_torque = control_input;
 
 		for (float &history_sample : estimator.torque_history) {
@@ -803,15 +720,6 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 
 	estimator.filtered_rate += filter_alpha * (rate - estimator.filtered_rate);
 
-	if (use_pitch_short_period) {
-		estimator.filtered_angle_of_attack += filter_alpha * (angle_of_attack - estimator.filtered_angle_of_attack);
-	}
-
-	if (use_lateral_coupling) {
-		estimator.filtered_cross_rate += filter_alpha * (cross_rate - estimator.filtered_cross_rate);
-		estimator.filtered_sideslip += filter_alpha * (sideslip - estimator.filtered_sideslip);
-	}
-
 	estimator.filtered_torque += filter_alpha * (control_input - estimator.filtered_torque);
 
 	const int delay_samples = math::constrain(static_cast<int>(roundf(input_delay_s / dt)), 0,
@@ -822,87 +730,21 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 	const float delayed_torque = estimator.torque_history[delayed_index];
 	estimator.torque_history_index = static_cast<uint8_t>((estimator.torque_history_index + 1U) % kTorqueHistoryLength);
 
-	// Regular axes: rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
-	// Pitch: q_dot = M_alpha * alpha[k-1] + M_q * q[k-1]
-	//                + M_delta * command[k-delay] + offset.
-	// Fitting pitch directly in continuous time is important: interpreting the
-	// elements of a discrete coupled alpha/q transition matrix independently
-	// with Euler conversion leaks M_alpha into M_q and biases both Cmalpha/Cmq.
-	// Lateral: p/r[k] = A_beta * beta[k-1] + A_self * p/r[k-1]
-	// + A_cross * r/p[k-1] + B * command[k-delay] + offset.
 	// The offset makes trim torque and slow navigation corrections harmless.
 	float phi[kMaxModelOrder] {};
-	const uint8_t model_order = use_lateral_coupling ? 5 : (use_pitch_short_period ? 4 : 3);
-
-	if (use_lateral_coupling) {
-		phi[0] = estimator.previous_filtered_sideslip;
-		phi[1] = estimator.previous_filtered_rate;
-		phi[2] = estimator.previous_filtered_cross_rate;
-		phi[3] = delayed_torque;
-		phi[4] = 1.f;
-
-	} else if (use_pitch_short_period) {
-		phi[0] = estimator.previous_filtered_angle_of_attack;
-		phi[1] = estimator.previous_filtered_rate;
-		phi[2] = delayed_torque;
-		phi[3] = 1.f;
-
-	} else {
-		phi[0] = estimator.previous_filtered_rate;
-		phi[1] = delayed_torque;
-		phi[2] = 1.f;
-	}
-
-	const float measured_rate = use_pitch_short_period
-				    ? (estimator.filtered_rate - estimator.previous_filtered_rate) / dt
-				    : estimator.filtered_rate;
+	phi[0] = estimator.previous_filtered_rate;
+	phi[1] = delayed_torque;
+	phi[2] = 1.f;
+	const float measured_rate = estimator.filtered_rate;
 
 	const float forgetting_factor = math::constrain(1.f - dt / time_constant, 0.95f, 0.9999f);
 	float fitted_rate = 0.f;
 
-	if (!update_rls(estimator.theta, estimator.covariance, phi, model_order, measured_rate, forgetting_factor, fitted_rate)) {
+	if (!update_rls(estimator.theta, estimator.covariance, phi, 3, measured_rate, forgetting_factor, fitted_rate)) {
 		return;
 	}
 
-	// The measured airflow angle is a second output state. Its RLS equation is
-	// a compact short-period (alpha/q) or lateral-directional (beta/p/r)
-	// model, which both improves observability and exposes a second fit score.
-	if (use_pitch_short_period || use_lateral_coupling) {
-		float airflow_phi[kMaxModelOrder] {};
-		const float airflow_output = use_pitch_short_period ? estimator.filtered_angle_of_attack : estimator.filtered_sideslip;
-		const uint8_t airflow_model_order = use_lateral_coupling ? 5 : 4;
-
-		if (use_lateral_coupling) {
-			airflow_phi[0] = estimator.previous_filtered_sideslip;
-			airflow_phi[1] = estimator.previous_filtered_rate;
-			airflow_phi[2] = estimator.previous_filtered_cross_rate;
-			airflow_phi[3] = delayed_torque;
-			airflow_phi[4] = 1.f;
-
-		} else {
-			airflow_phi[0] = estimator.previous_filtered_angle_of_attack;
-			airflow_phi[1] = estimator.previous_filtered_rate;
-			airflow_phi[2] = delayed_torque;
-			airflow_phi[3] = 1.f;
-		}
-
-		float fitted_airflow = 0.f;
-
-		if (!update_rls(estimator.airflow_theta, estimator.airflow_covariance, airflow_phi, airflow_model_order,
-				   airflow_output, forgetting_factor, fitted_airflow)) {
-			return;
-		}
-
-		if (estimator.sample_count >= kEstimatorWarmupSamples) {
-			const float airflow_residual = airflow_output - fitted_airflow;
-			estimator.airflow_residual_sum_sq += airflow_residual * airflow_residual;
-			estimator.airflow_output_sum_sq += airflow_output * airflow_output;
-			estimator.airflow_output_sum += airflow_output;
-		}
-	}
-
-	// Do not grade the intentional RLS convergence transient. Pitch grades the
-	// filtered q-dot residual; other axes grade their low-frequency rate model.
+	// Do not grade the intentional RLS convergence transient.
 	if (estimator.sample_count >= kEstimatorWarmupSamples) {
 		const float residual = measured_rate - fitted_rate;
 		estimator.residual_sum_sq += residual * residual;
@@ -915,20 +757,9 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 	estimator.command_sum_sq += delayed_torque * delayed_torque;
 	estimator.airspeed_sum += true_airspeed;
 
-	if (use_pitch_short_period) {
-		estimator.angle_of_attack_sum += estimator.filtered_angle_of_attack;
-	}
-
-	if (use_lateral_coupling) {
-		estimator.sideslip_sum += estimator.filtered_sideslip;
-	}
-
 	estimator.dt_sum += dt;
 	estimator.sample_count++;
 	estimator.previous_filtered_rate = estimator.filtered_rate;
-	estimator.previous_filtered_cross_rate = estimator.filtered_cross_rate;
-	estimator.previous_filtered_angle_of_attack = estimator.filtered_angle_of_attack;
-	estimator.previous_filtered_sideslip = estimator.filtered_sideslip;
 }
 
 void FwGainDesign::finalize_estimate(Axis axis)
@@ -953,31 +784,15 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	const float control_range[AXIS_COUNT] = {
 		_param_fw_gd_r_max.get(), _param_fw_gd_p_max.get(), _param_fw_gd_y_max.get()
 	};
-	const bool use_pitch_short_period = estimator.pitch_short_period;
-	const bool use_lateral_coupling = estimator.lateral_coupled;
 	const float airspeed = estimator.airspeed_sum / estimator.sample_count;
 	const float mean_dt = estimator.dt_sum / estimator.sample_count;
-	const float discrete_a = use_lateral_coupling ? estimator.theta[1] : (use_pitch_short_period ? NAN : estimator.theta[0]);
-	const float discrete_b = use_lateral_coupling ? estimator.theta[3] : (use_pitch_short_period ? NAN : estimator.theta[1]);
-	const float rate_a = use_pitch_short_period ? estimator.theta[1]
-			: (use_lateral_coupling
-			   ? (PX4_ISFINITE(discrete_a) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? (discrete_a - 1.f) / mean_dt : NAN)
-			: (PX4_ISFINITE(discrete_a) && discrete_a > FLT_EPSILON && PX4_ISFINITE(mean_dt) && mean_dt > 0.f
-			   ? logf(discrete_a) / mean_dt : NAN));
-	const float rate_b = use_pitch_short_period ? estimator.theta[2]
-			: (use_lateral_coupling
-			   ? (PX4_ISFINITE(discrete_b) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? discrete_b / mean_dt : NAN)
-			: (PX4_ISFINITE(rate_a) && PX4_ISFINITE(discrete_b)
-			   ? (fabsf(discrete_a - 1.f) > 1e-3f ? rate_a * discrete_b / (discrete_a - 1.f) : discrete_b / mean_dt) : NAN));
-	const float rate_alpha = use_pitch_short_period ? estimator.theta[0] : NAN;
-	const float rate_beta = use_lateral_coupling && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? estimator.theta[0] / mean_dt : NAN;
-	const float rate_cross = use_lateral_coupling && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? estimator.theta[2] / mean_dt : NAN;
-	const float airflow_rate_a = (use_pitch_short_period || use_lateral_coupling) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f
-			? (estimator.airflow_theta[0] - 1.f) / mean_dt : NAN;
-	const float airflow_rate_b = (use_pitch_short_period || use_lateral_coupling) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f
-			? estimator.airflow_theta[1] / mean_dt : NAN;
-	const float airflow_control_b = (use_pitch_short_period || use_lateral_coupling) && PX4_ISFINITE(mean_dt) && mean_dt > 0.f
-			? estimator.airflow_theta[use_lateral_coupling ? 3 : 2] / mean_dt : NAN;
+	const float discrete_a = estimator.theta[0];
+	const float discrete_b = estimator.theta[1];
+	const float rate_a = PX4_ISFINITE(discrete_a) && discrete_a > FLT_EPSILON
+			     && PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? logf(discrete_a) / mean_dt : NAN;
+	const float rate_b = PX4_ISFINITE(rate_a) && PX4_ISFINITE(discrete_b)
+			     ? (fabsf(discrete_a - 1.f) > 1e-3f ? rate_a * discrete_b / (discrete_a - 1.f)
+				: discrete_b / mean_dt) : NAN;
 	const float length = reference_length[axis_index];
 	const float command_mean = estimator.command_sum / estimator.sample_count;
 	const float command_variance = estimator.command_sum_sq / estimator.sample_count - command_mean * command_mean;
@@ -985,11 +800,6 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	const float output_variance = fmaxf(estimator.output_sum_sq / estimator.fit_sample_count - output_mean * output_mean, 0.f);
 	const float fit_denominator = sqrtf(output_variance);
 	const float fit = sqrtf(estimator.residual_sum_sq / estimator.fit_sample_count) / fmaxf(fit_denominator, 0.005f);
-	const float airflow_output_mean = estimator.airflow_output_sum / estimator.fit_sample_count;
-	const float airflow_output_variance = fmaxf(estimator.airflow_output_sum_sq / estimator.fit_sample_count
-						      - airflow_output_mean * airflow_output_mean, 0.f);
-	const float airflow_fit = (use_pitch_short_period || use_lateral_coupling)
-			? sqrtf(estimator.airflow_residual_sum_sq / estimator.fit_sample_count) / fmaxf(sqrtf(airflow_output_variance), 0.005f) : NAN;
 
 	// Publish candidates even when rejected so the flight log tells the operator
 	// why a result failed. Only identification_valid permits their use as a
@@ -997,19 +807,6 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	_identified_airspeed[axis_index] = airspeed;
 	_identified_rate_a[axis_index] = rate_a;
 	_identified_rate_b[axis_index] = rate_b;
-	_identified_airflow_rate_a[axis_index] = airflow_rate_a;
-	_identified_airflow_rate_b[axis_index] = airflow_rate_b;
-	_identified_airflow_control_b[axis_index] = airflow_control_b;
-	_identification_airflow_fit[axis_index] = airflow_fit;
-
-	if (use_pitch_short_period) {
-		_identified_pitch_angle_of_attack = estimator.angle_of_attack_sum / estimator.sample_count;
-		_identified_airflow_angle[axis_index] = _identified_pitch_angle_of_attack;
-
-	} else if (use_lateral_coupling) {
-		_identified_airflow_angle[axis_index] = estimator.sideslip_sum / estimator.sample_count;
-	}
-
 	if (!PX4_ISFINITE(rho) || !PX4_ISFINITE(sref) || !PX4_ISFINITE(length) || !PX4_ISFINITE(inertia[axis_index])
 	    || !PX4_ISFINITE(control_range[axis_index]) || !PX4_ISFINITE(airspeed) || !PX4_ISFINITE(rate_a)
 	    || !PX4_ISFINITE(rate_b) || !PX4_ISFINITE(fit) || rho <= 0.f || sref <= 0.f || length <= 0.f
@@ -1033,8 +830,7 @@ void FwGainDesign::finalize_estimate(Axis axis)
 		return;
 	}
 
-	if (fit > 0.5f || ((use_pitch_short_period || use_lateral_coupling)
-			   && (!PX4_ISFINITE(airflow_fit) || airflow_fit > 0.5f))) {
+	if (fit > 0.5f) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_POOR_FIT;
 		return;
 	}
@@ -1043,28 +839,11 @@ void FwGainDesign::finalize_estimate(Axis axis)
 						 / (rho * airspeed * sref * length * length);
 	const float control_derivative = 2.f * inertia[axis_index] * rate_b
 						 / (rho * airspeed * airspeed * sref * length * control_range[axis_index]);
-	const float static_derivative = use_pitch_short_period
-			? 2.f * inertia[PITCH] * rate_alpha / (rho * airspeed * airspeed * sref * _param_fw_gd_cref.get())
-			: (use_lateral_coupling ? 2.f * inertia[axis_index] * rate_beta
-			   / (rho * airspeed * airspeed * sref * length) : NAN);
-	const float cross_rate_derivative = use_lateral_coupling
-			? 4.f * inertia[axis_index] * rate_cross / (rho * airspeed * sref * length * length) : NAN;
-
 	_identified_damping_derivative[axis_index] = damping_derivative;
 	_identified_control_derivative[axis_index] = control_derivative;
-	_identified_static_derivative[axis_index] = static_derivative;
-	_identified_cross_rate_derivative[axis_index] = cross_rate_derivative;
-
-	if (use_pitch_short_period) {
-		_identified_pitch_cm_alpha = static_derivative;
-	}
 
 	if (!PX4_ISFINITE(damping_derivative) || !PX4_ISFINITE(control_derivative)
-	    || damping_derivative >= 0.f || control_derivative <= 0.f
-	    // A conventional fixed wing must produce a restoring nose-down moment
-	    // for positive alpha. Do not mark a poorly observable positive result
-	    // as a usable pitch model.
-	    || (use_pitch_short_period && (!PX4_ISFINITE(static_derivative) || static_derivative >= 0.f))) {
+	    || damping_derivative >= 0.f || control_derivative <= 0.f) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_DERIVATIVE;
 		return;
 	}
@@ -1080,47 +859,6 @@ void FwGainDesign::finalize_estimate(Axis axis)
 			PX4_WARN("could not save identified model to SD card");
 		}
 	}
-}
-
-bool FwGainDesign::estimate_airflow_angles(float &angle_of_attack, float &sideslip) const
-{
-	const vehicle_local_position_s &local_position = _vehicle_local_position_sub.get();
-	const vehicle_attitude_s &attitude = _vehicle_attitude_sub.get();
-
-	if (!local_position.v_xy_valid || !local_position.v_z_valid
-	    || hrt_elapsed_time(&local_position.timestamp) > 200_ms
-	    || hrt_elapsed_time(&attitude.timestamp) > 100_ms
-	    || !PX4_ISFINITE(local_position.vx) || !PX4_ISFINITE(local_position.vy) || !PX4_ISFINITE(local_position.vz)) {
-		return false;
-	}
-
-	// A fresh EKF wind estimate is used when available. With no wind topic (a
-	// common HIL setup) zero wind is an explicit fallback; a steady unmodelled
-	// wind mostly becomes part of the fitted trim offset, but a real flight
-	// should have a valid wind estimate for an accurate physical alpha value.
-	float wind_north = 0.f;
-	float wind_east = 0.f;
-	const wind_s &wind = _wind_sub.get();
-
-	if (hrt_elapsed_time(&wind.timestamp) < 1_s && PX4_ISFINITE(wind.windspeed_north)
-	    && PX4_ISFINITE(wind.windspeed_east)) {
-		wind_north = wind.windspeed_north;
-		wind_east = wind.windspeed_east;
-	}
-
-	const matrix::Vector3f airspeed_earth{local_position.vx - wind_north, local_position.vy - wind_east, local_position.vz};
-	const matrix::Dcmf body_to_earth{matrix::Quatf(attitude.q)};
-	const matrix::Vector3f airspeed_body = body_to_earth.transpose() * airspeed_earth;
-
-	if (!airspeed_body.isAllFinite() || airspeed_body(0) < 5.f) {
-		return false;
-	}
-
-	angle_of_attack = atan2f(-airspeed_body(2), airspeed_body(0));
-	sideslip = atan2f(airspeed_body(1), sqrtf(airspeed_body(0) * airspeed_body(0)
-						 + airspeed_body(2) * airspeed_body(2)));
-	return PX4_ISFINITE(angle_of_attack) && PX4_ISFINITE(sideslip)
-	       && fabsf(angle_of_attack) < math::radians(30.f) && fabsf(sideslip) < math::radians(30.f);
 }
 
 bool FwGainDesign::flight_test_conditions_met(Axis axis, float &true_airspeed) const
@@ -1187,13 +925,10 @@ void FwGainDesign::update_flight_test()
 	_airspeed_validated_sub.update();
 	_vehicle_angular_velocity_sub.update();
 	_actuator_servos_sub.update();
-	_vehicle_attitude_sub.update();
-	_vehicle_local_position_sub.update();
 	_vehicle_status_sub.update();
 	_vehicle_control_mode_sub.update();
 	_vehicle_land_detected_sub.update();
 	_manual_control_setpoint_sub.update();
-	_wind_sub.update();
 
 	const uint8_t command = _excitation_command.load();
 
@@ -1305,14 +1040,10 @@ void FwGainDesign::update_flight_test()
 	if (_last_estimator_sample != angular_velocity.timestamp_sample && _last_estimator_sample != 0) {
 		const float dt = (angular_velocity.timestamp_sample - _last_estimator_sample) * 1e-6f;
 		float control_input = NAN;
-		float angle_of_attack = NAN;
-		float sideslip = NAN;
-		float cross_rate = NAN;
 		const bool input_valid = control_surface_input(_excitation_axis, control_input);
 
 		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid) {
-			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], cross_rate,
-					 control_input, angle_of_attack, sideslip, true_airspeed, dt);
+			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], control_input, true_airspeed, dt);
 		}
 	}
 
@@ -1333,14 +1064,6 @@ void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
 		design.identified_rate_b[axis] = _identified_rate_b[axis];
 		design.identified_damping_derivative[axis] = _identified_damping_derivative[axis];
 		design.identified_control_derivative[axis] = _identified_control_derivative[axis];
-		design.identified_coupled_model[axis] = _identified_coupled_model[axis];
-		design.identified_airflow_angle[axis] = _identified_airflow_angle[axis];
-		design.identified_static_derivative[axis] = _identified_static_derivative[axis];
-		design.identified_cross_rate_derivative[axis] = _identified_cross_rate_derivative[axis];
-		design.identified_airflow_rate_a[axis] = _identified_airflow_rate_a[axis];
-		design.identified_airflow_rate_b[axis] = _identified_airflow_rate_b[axis];
-		design.identified_airflow_control_b[axis] = _identified_airflow_control_b[axis];
-		design.identification_airflow_fit[axis] = _identification_airflow_fit[axis];
 		design.identification_valid[axis] = _identified_valid[axis];
 
 		if (_estimator[axis].fit_sample_count > 0) {
@@ -1357,10 +1080,6 @@ void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
 
 		design.identification_reject_reason[axis] = _identification_reject_reason[axis];
 	}
-
-	design.identified_pitch_short_period = _identified_pitch_short_period;
-	design.identified_pitch_cm_alpha = _identified_pitch_cm_alpha;
-	design.identified_pitch_angle_of_attack = _identified_pitch_angle_of_attack;
 
 	design.excitation_state = _excitation_state;
 	design.excitation_axis = static_cast<uint8_t>(_excitation_axis);

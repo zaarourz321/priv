@@ -62,12 +62,9 @@
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
-#include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_control_mode.h>
 #include <uORB/topics/vehicle_land_detected.h>
-#include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_status.h>
-#include <uORB/topics/wind.h>
 
 using namespace time_literals;
 
@@ -98,11 +95,9 @@ private:
 	void calculate_design(float true_airspeed, fw_gain_design_s &design) const;
 	void update_flight_test();
 	void reset_estimator(Axis axis);
-	void update_estimator(Axis axis, float rate, float cross_rate, float control_input, float angle_of_attack, float sideslip,
-			      float true_airspeed, float dt);
+	void update_estimator(Axis axis, float rate, float control_input, float true_airspeed, float dt);
 	void finalize_estimate(Axis axis);
 	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
-	bool estimate_airflow_angles(float &angle_of_attack, float &sideslip) const;
 	bool control_surface_input(Axis axis, float &control_input) const;
 	void update_control_surface_mapping();
 	bool model_source_is_estimated(Axis axis) const;
@@ -122,44 +117,28 @@ private:
 	uint8_t validate_common_inputs() const;
 
 	static constexpr uint8_t kTorqueHistoryLength = 20;
-	static constexpr uint8_t kMaxModelOrder = 5;
+	static constexpr uint8_t kMaxModelOrder = 3;
 	static constexpr uint32_t kEstimatorWarmupSamples = 100;
 
 	struct RateEstimator {
-		// Regular axes use rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
-		// Each axis uses a simple discrete SISO rate model with an allocated
-		// physical control-surface command as input.
+		// rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
+		// The input is an allocated physical control-surface command.
 		float theta[kMaxModelOrder] {};
 		float covariance[kMaxModelOrder][kMaxModelOrder] {};
-		float airflow_theta[kMaxModelOrder] {};
-		float airflow_covariance[kMaxModelOrder][kMaxModelOrder] {};
 		float residual_sum_sq{0.f};
 		float output_sum_sq{0.f};
 		float output_sum{0.f};
-		float airflow_residual_sum_sq{0.f};
-		float airflow_output_sum_sq{0.f};
-		float airflow_output_sum{0.f};
 		float command_sum{0.f};
 		float command_sum_sq{0.f};
 		float airspeed_sum{0.f};
-		float angle_of_attack_sum{0.f};
-		float sideslip_sum{0.f};
 		float dt_sum{0.f};
 		float filtered_rate{NAN};
 		float previous_filtered_rate{NAN};
-		float filtered_cross_rate{NAN};
-		float previous_filtered_cross_rate{NAN};
-		float filtered_angle_of_attack{NAN};
-		float previous_filtered_angle_of_attack{NAN};
-		float filtered_sideslip{NAN};
-		float previous_filtered_sideslip{NAN};
 		float filtered_torque{NAN};
 		float torque_history[kTorqueHistoryLength] {};
 		uint32_t sample_count{0};
 		uint32_t fit_sample_count{0};
 		uint8_t torque_history_index{0};
-		bool pitch_short_period{false};
-		bool lateral_coupled{false};
 		bool filters_initialized{false};
 		bool initialized{false};
 	};
@@ -171,23 +150,12 @@ private:
 		uint16_t version;
 		uint16_t size;
 		uint8_t valid_mask;
-		uint8_t coupled_mask;
-		uint8_t pitch_short_period;
-		uint8_t reserved;
+		uint8_t reserved[3];
 		float damping_derivative[AXIS_COUNT];
 		float control_derivative[AXIS_COUNT];
 		float rate_a[AXIS_COUNT];
 		float rate_b[AXIS_COUNT];
 		float airspeed[AXIS_COUNT];
-		float static_derivative[AXIS_COUNT];
-		float cross_rate_derivative[AXIS_COUNT];
-		float airflow_angle[AXIS_COUNT];
-		float airflow_rate_a[AXIS_COUNT];
-		float airflow_rate_b[AXIS_COUNT];
-		float airflow_control_b[AXIS_COUNT];
-		float airflow_fit[AXIS_COUNT];
-		float pitch_cm_alpha;
-		float pitch_angle_of_attack;
 		uint32_t checksum;
 	};
 
@@ -201,13 +169,10 @@ private:
 	uORB::SubscriptionData<actuator_armed_s> _actuator_armed_sub{ORB_ID(actuator_armed)};
 	uORB::SubscriptionData<actuator_servos_s> _actuator_servos_sub{ORB_ID(actuator_servos)};
 	uORB::SubscriptionData<vehicle_angular_velocity_s> _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
-	uORB::SubscriptionData<vehicle_attitude_s> _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
-	uORB::SubscriptionData<vehicle_local_position_s> _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
 	uORB::SubscriptionData<vehicle_status_s> _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::SubscriptionData<vehicle_control_mode_s> _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::SubscriptionData<vehicle_land_detected_s> _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
 	uORB::SubscriptionData<manual_control_setpoint_s> _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
-	uORB::SubscriptionData<wind_s> _wind_sub{ORB_ID(wind)};
 	uORB::Publication<fw_gain_design_s> _gain_design_pub{ORB_ID(fw_gain_design)};
 	uORB::Publication<fw_gain_design_gains_s> _gain_design_gains_pub{ORB_ID(fw_gain_design_gains)};
 
@@ -224,17 +189,6 @@ private:
 	float _identified_rate_a[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_rate_b[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_airspeed[AXIS_COUNT] {NAN, NAN, NAN};
-	float _identified_static_derivative[AXIS_COUNT] {NAN, NAN, NAN};
-	float _identified_cross_rate_derivative[AXIS_COUNT] {NAN, NAN, NAN};
-	float _identified_airflow_angle[AXIS_COUNT] {NAN, NAN, NAN};
-	float _identified_airflow_rate_a[AXIS_COUNT] {NAN, NAN, NAN};
-	float _identified_airflow_rate_b[AXIS_COUNT] {NAN, NAN, NAN};
-	float _identified_airflow_control_b[AXIS_COUNT] {NAN, NAN, NAN};
-	float _identification_airflow_fit[AXIS_COUNT] {NAN, NAN, NAN};
-	float _identified_pitch_cm_alpha{NAN};
-	float _identified_pitch_angle_of_attack{NAN};
-	bool _identified_coupled_model[AXIS_COUNT] {};
-	bool _identified_pitch_short_period{false};
 	bool _identified_valid[AXIS_COUNT] {};
 	uint8_t _identification_reject_reason[AXIS_COUNT] {
 		fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN,
@@ -295,11 +249,6 @@ private:
 		(ParamFloat<px4::params::FW_GD_CLP>) _param_fw_gd_clp,
 		(ParamFloat<px4::params::FW_GD_CMQ>) _param_fw_gd_cmq,
 		(ParamFloat<px4::params::FW_GD_CNR>) _param_fw_gd_cnr,
-		(ParamFloat<px4::params::FW_GD_CLB>) _param_fw_gd_clb,
-		(ParamFloat<px4::params::FW_GD_CLR>) _param_fw_gd_clr,
-		(ParamFloat<px4::params::FW_GD_CMA>) _param_fw_gd_cma,
-		(ParamFloat<px4::params::FW_GD_CNB>) _param_fw_gd_cnb,
-		(ParamFloat<px4::params::FW_GD_CNP>) _param_fw_gd_cnp,
 		(ParamFloat<px4::params::FW_GD_CLDU>) _param_fw_gd_cldu,
 		(ParamFloat<px4::params::FW_GD_CMDU>) _param_fw_gd_cmdu,
 		(ParamFloat<px4::params::FW_GD_CNDU>) _param_fw_gd_cndu,

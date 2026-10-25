@@ -59,11 +59,6 @@ uint8[3] model_source
 uint8 MODEL_SOURCE_MANUAL = 0
 uint8 MODEL_SOURCE_FLIGHT_TEST = 1
 
-# Coupled manual-model inputs, published so they can be directly compared to
-# their identified equivalents. Axes are roll, pitch, yaw.
-float32[3] manual_static_derivative      # Cl_beta, Cm_alpha, Cn_beta
-float32[3] manual_cross_rate_derivative  # Cl_r, NaN, Cn_p
-
 # Flight-test excitation telemetry. Excitation is a bounded rate-setpoint
 # addition handled by fixed-wing attitude control; this module never publishes
 # a competing torque setpoint.
@@ -98,25 +93,6 @@ float32[3] identified_damping_derivative # Cl_p, Cm_q, Cn_r
 float32[3] identified_control_derivative # Cl_du, Cm_du, Cn_du [per rad]
 float32[3] identification_fit            # normalized RMS residual, lower is better
 bool[3] identification_valid
-
-# Pitch-only short-period identification diagnostics. When enabled, the pitch
-# estimator uses estimated angle of attack as a separate state so Cmq is not
-# contaminated by Cm_alpha coupling. Angle of attack is in radians.
-bool identified_pitch_short_period
-float32 identified_pitch_cm_alpha
-float32 identified_pitch_angle_of_attack
-
-# Coupled-model diagnostics. Roll and yaw tests use beta/p/r; pitch tests use
-# alpha/q. These values are advisory model-identification telemetry only and
-# are never automatically applied as controller gains.
-bool[3] identified_coupled_model
-float32[3] identified_airflow_angle          # beta for roll/yaw, alpha for pitch [rad]
-float32[3] identified_static_derivative      # Cl_beta, Cm_alpha, Cn_beta
-float32[3] identified_cross_rate_derivative  # Cl_r, NaN, Cn_p
-float32[3] identified_airflow_rate_a         # alpha/beta state self coefficient [1/s]
-float32[3] identified_airflow_rate_b         # alpha/beta coupling from p/q/r [1/s]
-float32[3] identified_airflow_control_b      # alpha/beta control coefficient [1/s]
-float32[3] identification_airflow_fit        # normalized RMS of alpha/beta fit, lower is better
 
 # Per-axis reason why a completed candidate was rejected. A value of VALID is
 # only meaningful when the corresponding identification_valid element is true.
