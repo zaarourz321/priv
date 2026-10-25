@@ -1436,25 +1436,31 @@ void FwGainDesign::restore_inactive_axes(bool armed)
 	}
 }
 
-void FwGainDesign::apply_live_gains()
+void FwGainDesign::publish_live_gains()
 {
 	_actuator_armed_sub.update();
 	const bool armed = _actuator_armed_sub.get().armed;
 	restore_inactive_axes(armed);
 
+	fw_gain_design_gains_s gains{};
+	gains.timestamp = hrt_absolute_time();
+	gains.airspeed = NAN;
+
+	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+		gains.rate_p[axis] = NAN;
+		gains.rate_i[axis] = NAN;
+		gains.rate_ff[axis] = NAN;
+		gains.attitude_tc[axis] = NAN;
+	}
+
 	const bool any_apply_enabled = apply_enabled(ROLL) || apply_enabled(PITCH) || apply_enabled(YAW);
 
 	if (!armed || !any_apply_enabled) {
+		_gain_design_gains_pub.publish(gains);
 		return;
 	}
 
 	const hrt_abstime now = hrt_absolute_time();
-
-	if (_last_gain_apply != 0 && now - _last_gain_apply < 500_ms) {
-		return;
-	}
-
-	_last_gain_apply = now;
 	_airspeed_validated_sub.update();
 	const airspeed_validated_s &airspeed = _airspeed_validated_sub.get();
 	const bool airspeed_valid = PX4_ISFINITE(airspeed.true_airspeed_m_s)
@@ -1474,12 +1480,22 @@ void FwGainDesign::apply_live_gains()
 			param_notify_changes();
 		}
 
+		_gain_design_gains_pub.publish(gains);
 		return;
 	}
 
 	fw_gain_design_s design{};
 	calculate_design(airspeed.true_airspeed_m_s, design);
-	bool changed = false;
+	gains.airspeed = airspeed.true_airspeed_m_s;
+	bool parameter_changed = false;
+
+	if (_last_gain_parameter_sync == 0) {
+		// The fast path below is already active. Delay the first legacy parameter
+		// update by one minute so it cannot become a 50 Hz parameter-write path.
+		_last_gain_parameter_sync = now;
+	}
+
+	const bool parameter_sync_due = now - _last_gain_parameter_sync >= 60_s;
 
 	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
 		const Axis gain_axis = static_cast<Axis>(axis);
@@ -1493,22 +1509,57 @@ void FwGainDesign::apply_live_gains()
 							   && gain_axis == _excitation_axis;
 
 			if (!axis_is_under_test && design.axis_status[axis] == fw_gain_design_s::AXIS_STATUS_VALID && attitude_design_valid) {
-				changed |= apply_axis(gain_axis, design);
+				gains.rate_valid[axis] = true;
+				gains.rate_p[axis] = design.px4_rate_p[axis];
+				gains.rate_i[axis] = design.px4_rate_i[axis];
+				gains.rate_ff[axis] = design.px4_rate_ff[axis];
+
+				if (gain_axis != YAW) {
+					gains.attitude_valid[axis] = true;
+					gains.attitude_tc[axis] = design.attitude_tc[axis];
+				}
+
+				if (parameter_sync_due && capture_axis_baseline(gain_axis)) {
+					parameter_changed |= apply_axis(gain_axis, design);
+				}
 
 			} else {
-				changed |= restore_axis(gain_axis);
+				// A direct uORB override is removed immediately if its validity gate
+				// fails. This is safety behavior, not periodic synchronization.
+				parameter_changed |= restore_axis(gain_axis);
 			}
 		}
 	}
 
-	if (changed) {
+	if (parameter_sync_due) {
+		_last_gain_parameter_sync = now;
+	}
+
+	if (parameter_changed) {
 		param_notify_changes();
 	}
+
+	_gain_design_gains_pub.publish(gains);
 }
 
 void FwGainDesign::Run()
 {
 	if (should_exit()) {
+		// Consumers fall back immediately instead of waiting for the stale-topic
+		// timeout, and any once-per-minute compatibility mirror is put back.
+		restore_inactive_axes(false);
+		fw_gain_design_gains_s gains{};
+		gains.timestamp = hrt_absolute_time();
+		gains.airspeed = NAN;
+
+		for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+			gains.rate_p[axis] = NAN;
+			gains.rate_i[axis] = NAN;
+			gains.rate_ff[axis] = NAN;
+			gains.attitude_tc[axis] = NAN;
+		}
+
+		_gain_design_gains_pub.publish(gains);
 		ScheduleClear();
 		exit_and_cleanup();
 		return;
@@ -1542,7 +1593,7 @@ void FwGainDesign::Run()
 	}
 
 	update_flight_test();
-	apply_live_gains();
+	publish_live_gains();
 	publish_next_design_point();
 }
 

@@ -55,6 +55,7 @@
 #include <uORB/topics/airspeed_validated.h>
 #include <uORB/topics/autotune_attitude_control_status.h>
 #include <uORB/topics/fw_gain_design.h>
+#include <uORB/topics/fw_gain_design_gains.h>
 #include <uORB/topics/landing_gear_wheel.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
@@ -102,6 +103,7 @@ private:
 	uORB::Subscription _att_sp_sub{ORB_ID(vehicle_attitude_setpoint)};			/**< vehicle attitude setpoint */
 	uORB::Subscription _autotune_attitude_control_status_sub{ORB_ID(autotune_attitude_control_status)};
 	uORB::Subscription _fw_gain_design_sub{ORB_ID(fw_gain_design)};
+	uORB::Subscription _fw_gain_design_gains_sub{ORB_ID(fw_gain_design_gains)};
 	uORB::Subscription _local_pos_sub{ORB_ID(vehicle_local_position)};			/**< local position subscription */
 	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};	/**< notification of manual control updates */
 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};			/**< vehicle status subscription */
@@ -131,6 +133,8 @@ private:
 	bool _landed{true};
 	float _groundspeed{0.f};
 	bool _in_fw_or_transition_wo_tailsitter_transition{false}; // only run the FW attitude controller in these states
+	fw_gain_design_gains_s _gain_design_gains{};
+	bool _gain_schedule_attitude_active[2] {};
 
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::FW_AIRSPD_MAX>) _param_fw_airspd_max,
@@ -168,6 +172,7 @@ private:
 	ECL_WheelController _wheel_ctrl;
 
 	void parameters_update();
+	void update_gain_schedule();
 	void vehicle_manual_poll(const float yaw_body);
 	void vehicle_attitude_setpoint_poll();
 	void vehicle_land_detected_poll();

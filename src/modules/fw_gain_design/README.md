@@ -13,14 +13,21 @@ uses only a fresh `airspeed_validated.true_airspeed_m_s` sample while the
 vehicle is armed and the airspeed remains inside `FW_GD_VMIN` through
 `FW_GD_VMAX`.
 
-The roll and pitch switches update their respective `FW_RR_*` / `FW_PR_*`
-rate gains and `FW_R_TC` / `FW_P_TC`; yaw updates `FW_YR_*`. Updates are
-batched, rate-limited, and only sent when a calculated gain changes
-meaningfully. The module captures the prior values when it first takes over an
-axis and restores them when that axis is disabled, true airspeed becomes
-unavailable or leaves the design range, the vehicle disarms, or the module is
-stopped. Do not enable yaw application with `FW_YAW_DAMP_EN`, because the
-aileron yaw damper intentionally disables the yaw-rate loop.
+The active values are published at 50 Hz on the dedicated
+`fw_gain_design_gains` uORB topic. Fixed-wing rate control consumes its P, I,
+and FF gains directly; fixed-wing attitude control consumes its roll/pitch
+time constants directly. This is the control path, so controller parameters
+are not rewritten on every schedule update. A controller rejects a stale
+(over 100 ms), invalid, disabled, unarmed, out-of-range, or excitation-axis
+sample and immediately falls back to its configured `FW_*` parameters.
+
+For compatibility and QGroundControl inspection, the selected values are
+mirrored to `FW_RR_*` / `FW_PR_*` / `FW_YR_*` and `FW_R_TC` / `FW_P_TC` at
+most once per minute. If those legacy values were written, their saved
+baseline is restored immediately when an axis is disabled, the true airspeed
+becomes unavailable or leaves the design range, the vehicle disarms, or the
+module stops. Do not enable yaw application with `FW_YAW_DAMP_EN`, because
+the aileron yaw damper intentionally disables the yaw-rate loop.
 
 ## Manual or identified model, per axis
 

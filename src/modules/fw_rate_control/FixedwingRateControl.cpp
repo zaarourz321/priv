@@ -80,11 +80,10 @@ FixedwingRateControl::parameters_update()
 	const float yaw_integrator_gain = aileron_yaw_damper_enabled ? 0.f : _param_fw_yr_i.get();
 	const float yaw_rate_derivative_gain = aileron_yaw_damper_enabled ? 0.f : _param_fw_yr_d.get();
 
-	const Vector3f rate_p = Vector3f(_param_fw_rr_p.get(), _param_fw_pr_p.get(), yaw_rate_gain);
-	const Vector3f rate_i = Vector3f(_param_fw_rr_i.get(), _param_fw_pr_i.get(), yaw_integrator_gain);
-	const Vector3f rate_d = Vector3f(_param_fw_rr_d.get(), _param_fw_pr_d.get(), yaw_rate_derivative_gain);
-
-	_rate_control.setGains(rate_p, rate_i, rate_d);
+	_base_rate_p = Vector3f(_param_fw_rr_p.get(), _param_fw_pr_p.get(), yaw_rate_gain);
+	_base_rate_i = Vector3f(_param_fw_rr_i.get(), _param_fw_pr_i.get(), yaw_integrator_gain);
+	_base_rate_d = Vector3f(_param_fw_rr_d.get(), _param_fw_pr_d.get(), yaw_rate_derivative_gain);
+	apply_rate_control_gains();
 
 	_rate_control.setIntegratorLimit(
 		Vector3f(_param_fw_rr_imax.get(), _param_fw_pr_imax.get(), aileron_yaw_damper_enabled ? 0.f : _param_fw_yr_imax.get()));
@@ -102,6 +101,61 @@ FixedwingRateControl::parameters_update()
 
 
 	return PX4_OK;
+}
+
+void FixedwingRateControl::apply_rate_control_gains()
+{
+	Vector3f rate_p = _base_rate_p;
+	Vector3f rate_i = _base_rate_i;
+
+	for (uint8_t axis = 0; axis < 3; ++axis) {
+		if (_gain_schedule_rate_active[axis]) {
+			rate_p(axis) = _gain_design_gains.rate_p[axis];
+			rate_i(axis) = _gain_design_gains.rate_i[axis];
+		}
+	}
+
+	_rate_control.setGains(rate_p, rate_i, _base_rate_d);
+}
+
+void FixedwingRateControl::update_gain_schedule()
+{
+	const bool new_sample = _fw_gain_design_gains_sub.update(&_gain_design_gains);
+	const bool fresh = _gain_design_gains.timestamp != 0
+				   && hrt_elapsed_time(&_gain_design_gains.timestamp) <= 100_ms;
+	bool active[3] {};
+	bool changed = false;
+	bool any_active = false;
+
+	for (uint8_t axis = 0; axis < 3; ++axis) {
+		active[axis] = fresh && _gain_design_gains.rate_valid[axis]
+				       && PX4_ISFINITE(_gain_design_gains.rate_p[axis])
+				       && PX4_ISFINITE(_gain_design_gains.rate_i[axis])
+				       && PX4_ISFINITE(_gain_design_gains.rate_ff[axis]);
+
+		// The aileron yaw damper deliberately owns yaw damping on this airframe.
+		active[2] = active[2] && _param_fw_yaw_damp_en.get() == 0;
+		changed |= active[axis] != _gain_schedule_rate_active[axis];
+		_gain_schedule_rate_active[axis] = active[axis];
+		any_active |= active[axis];
+	}
+
+	if (changed || (new_sample && any_active)) {
+		apply_rate_control_gains();
+	}
+}
+
+float FixedwingRateControl::gain_schedule_ff(uint8_t axis) const
+{
+	if (axis < 3 && _gain_schedule_rate_active[axis]) {
+		return _gain_design_gains.rate_ff[axis];
+	}
+
+	switch (axis) {
+	case 0: return _param_fw_rr_ff.get();
+	case 1: return _param_fw_pr_ff.get();
+	default: return _param_fw_yr_ff.get();
+	}
 }
 
 void
@@ -225,6 +279,8 @@ void FixedwingRateControl::Run()
 			updateParams();
 			parameters_update();
 		}
+
+		update_gain_schedule();
 
 		float dt = 0.f;
 
@@ -376,7 +432,7 @@ void FixedwingRateControl::Run()
 				const Vector3f angular_acceleration_setpoint = _rate_control.update(rates, body_rates_setpoint, angular_accel, dt,
 						_landed);
 
-				float roll_feedforward = _param_fw_rr_ff.get() * _airspeed_scaling * body_rates_setpoint(0);
+				float roll_feedforward = gain_schedule_ff(0) * _airspeed_scaling * body_rates_setpoint(0);
 				float roll_u = angular_acceleration_setpoint(0) * _airspeed_scaling * _airspeed_scaling + roll_feedforward;
 
 				vehicle_attitude_s vehicle_attitude{};
@@ -406,11 +462,11 @@ void FixedwingRateControl::Run()
 
 				_vehicle_torque_setpoint.xyz[0] = PX4_ISFINITE(roll_u) ? math::constrain(roll_u + trim_roll, -1.f, 1.f) : trim_roll;
 
-				float pitch_feedforward = _param_fw_pr_ff.get() * _airspeed_scaling * body_rates_setpoint(1);
+				float pitch_feedforward = gain_schedule_ff(1) * _airspeed_scaling * body_rates_setpoint(1);
 				float pitch_u = angular_acceleration_setpoint(1) * _airspeed_scaling * _airspeed_scaling + pitch_feedforward;
 				_vehicle_torque_setpoint.xyz[1] = PX4_ISFINITE(pitch_u) ? math::constrain(pitch_u + trim_pitch, -1.f, 1.f) : trim_pitch;
 
-				const float yaw_feedforward = aileron_yaw_damper_enabled ? 0.f : _param_fw_yr_ff.get() * _airspeed_scaling * body_rates_setpoint(2);
+				const float yaw_feedforward = aileron_yaw_damper_enabled ? 0.f : gain_schedule_ff(2) * _airspeed_scaling * body_rates_setpoint(2);
 				float yaw_u = angular_acceleration_setpoint(2) * _airspeed_scaling * _airspeed_scaling + yaw_feedforward;
 
 				_vehicle_torque_setpoint.xyz[2] = aileron_yaw_damper_enabled ? 0.f :

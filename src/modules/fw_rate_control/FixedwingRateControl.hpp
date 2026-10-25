@@ -61,6 +61,7 @@
 #include <uORB/topics/airspeed_validated.h>
 #include <uORB/topics/battery_status.h>
 #include <uORB/topics/control_allocator_status.h>
+#include <uORB/topics/fw_gain_design_gains.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/normalized_unsigned_setpoint.h>
 #include <uORB/topics/parameter_update.h>
@@ -76,6 +77,7 @@
 
 using matrix::Eulerf;
 using matrix::Quatf;
+using matrix::Vector3f;
 
 using uORB::SubscriptionData;
 
@@ -107,6 +109,7 @@ private:
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
 
 	uORB::Subscription _battery_status_sub{ORB_ID(battery_status)};
+	uORB::Subscription _fw_gain_design_gains_sub{ORB_ID(fw_gain_design_gains)};
 	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Subscription _rates_sp_sub{ORB_ID(vehicle_rates_setpoint)};
 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
@@ -150,6 +153,11 @@ private:
 	float _control_prev[3] {};
 
 	bool _in_fw_or_transition_wo_tailsitter_transition{false}; // only run the FW attitude controller in these states
+	Vector3f _base_rate_p{};
+	Vector3f _base_rate_i{};
+	Vector3f _base_rate_d{};
+	fw_gain_design_gains_s _gain_design_gains{};
+	bool _gain_schedule_rate_active[3] {};
 
 	// enum for bitmask of VT_FW_DIFTHR_EN parameter options
 	enum class VTOLFixedWingDifferentialThrustEnabledBit : int32_t {
@@ -228,6 +236,9 @@ private:
 	 * Update our local parameter cache.
 	 */
 	int		parameters_update();
+	void		update_gain_schedule();
+	void		apply_rate_control_gains();
+	float		gain_schedule_ff(uint8_t axis) const;
 
 	void		vehicle_manual_poll();
 	void		vehicle_land_detected_poll();

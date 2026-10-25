@@ -57,6 +57,7 @@
 #include <uORB/topics/actuator_armed.h>
 #include <uORB/topics/airspeed_validated.h>
 #include <uORB/topics/fw_gain_design.h>
+#include <uORB/topics/fw_gain_design_gains.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
@@ -109,7 +110,7 @@ private:
 	void fill_flight_test_status(fw_gain_design_s &design) const;
 	bool load_model_from_sd();
 	bool save_model_to_sd();
-	void apply_live_gains();
+	void publish_live_gains();
 	bool apply_axis(Axis axis, const fw_gain_design_s &design);
 	bool restore_axis(Axis axis);
 	void restore_inactive_axes(bool armed);
@@ -207,12 +208,13 @@ private:
 	uORB::SubscriptionData<manual_control_setpoint_s> _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
 	uORB::SubscriptionData<wind_s> _wind_sub{ORB_ID(wind)};
 	uORB::Publication<fw_gain_design_s> _gain_design_pub{ORB_ID(fw_gain_design)};
+	uORB::Publication<fw_gain_design_gains_s> _gain_design_gains_pub{ORB_ID(fw_gain_design_gains)};
 
 	uint32_t _calculation_id{0};
 	uint16_t _speed_index{0};
 	uint16_t _speed_count{0};
 	uint8_t _schedule_status{fw_gain_design_s::SCHEDULE_STATUS_INVALID_RANGE};
-	hrt_abstime _last_gain_apply{0};
+	hrt_abstime _last_gain_parameter_sync{0};
 	hrt_abstime _last_estimator_sample{0};
 
 	RateEstimator _estimator[AXIS_COUNT] {};

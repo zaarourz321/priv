@@ -84,6 +84,30 @@ FixedwingAttitudeControl::parameters_update()
 	_wheel_ctrl.set_max_rate(radians(_param_fw_w_rmax.get()));
 }
 
+void FixedwingAttitudeControl::update_gain_schedule()
+{
+	const bool new_sample = _fw_gain_design_gains_sub.update(&_gain_design_gains);
+	const bool fresh = _gain_design_gains.timestamp != 0
+				   && hrt_elapsed_time(&_gain_design_gains.timestamp) <= 100_ms;
+	bool active[2] {};
+
+	for (uint8_t axis = 0; axis < 2; ++axis) {
+		active[axis] = fresh && _gain_design_gains.attitude_valid[axis]
+				       && PX4_ISFINITE(_gain_design_gains.attitude_tc[axis]);
+	}
+
+	const bool changed = active[0] != _gain_schedule_attitude_active[0]
+				     || active[1] != _gain_schedule_attitude_active[1];
+
+	if (changed || (new_sample && (active[0] || active[1]))) {
+		_roll_ctrl.set_time_constant(active[0] ? _gain_design_gains.attitude_tc[0] : _param_fw_r_tc.get());
+		_pitch_ctrl.set_time_constant(active[1] ? _gain_design_gains.attitude_tc[1] : _param_fw_p_tc.get());
+	}
+
+	_gain_schedule_attitude_active[0] = active[0];
+	_gain_schedule_attitude_active[1] = active[1];
+}
+
 void
 FixedwingAttitudeControl::vehicle_manual_poll(const float yaw_body)
 {
@@ -193,6 +217,8 @@ void FixedwingAttitudeControl::Run()
 			updateParams();
 			parameters_update();
 		}
+
+		update_gain_schedule();
 
 		float dt = 0.f;
 
