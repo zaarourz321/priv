@@ -453,47 +453,6 @@ PARAM_DEFINE_FLOAT(FW_GD_R_ZETA, 0.8f);
 PARAM_DEFINE_FLOAT(FW_GD_P_ZETA, 0.8f);
 
 /**
- * Enable acceleration-controller gain recommendation
- *
- * During a pitch excitation, identify the forward body-acceleration response
- * to the injected pitch-rate setpoint and publish advisory negative PI gains
- * for TG_ACC_P_GAIN and TG_ACC_I_GAIN. This never writes TG_* parameters.
- *
- * @boolean
- * @group FW Gain Design Acceleration
- */
-PARAM_DEFINE_INT32(FW_GD_ACC_EN, 1);
-
-/**
- * Acceleration controller bandwidth ratio
- *
- * Requested acceleration-loop natural frequency divided by the identified
- * longitudinal acceleration plant bandwidth. Values below approximately
- * 1/(2*zeta) cannot produce the required negative proportional gain and are
- * deliberately rejected.
- *
- * @min 0.1
- * @max 10.0
- * @decimal 2
- * @increment 0.05
- * @group FW Gain Design Acceleration
- */
-PARAM_DEFINE_FLOAT(FW_GD_ACC_BWR, 0.8f);
-
-/**
- * Acceleration controller damping ratio
- *
- * Target damping ratio for the acceleration PI pole-placement design.
- *
- * @min 0.1
- * @max 5.0
- * @decimal 2
- * @increment 0.05
- * @group FW Gain Design Acceleration
- */
-PARAM_DEFINE_FLOAT(FW_GD_ACC_ZETA, 0.9f);
-
-/**
  * Yaw rate damping ratio
  *
  * Target closed-loop damping ratio used by the yaw PI pole placement.

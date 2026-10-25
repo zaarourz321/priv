@@ -161,38 +161,6 @@ topic, the estimator explicitly falls back to zero wind. That is appropriate
 only when the simulated wind is zero. In real flight, a valid wind estimate is
 needed for an accurate physical angle of attack.
 
-### Longitudinal acceleration PI recommendation
-
-A completed **pitch** excitation also identifies the closed inner-loop
-longitudinal plant seen by the custom acceleration controller:
-
-```
-a_x_dot = a_acc * a_x + b_acc * q_sp + bias
-```
-
-`a_x` is `vehicle_acceleration.xyz[0]`, the bias-corrected forward FRD body
-acceleration including gravity, and `q_sp` is the bounded pitch-rate setpoint
-added by this module. This matches an acceleration controller whose output is
-a pitch-rate command. It deliberately identifies the whole response through
-the existing pitch-rate loop rather than assuming the pitch aerodynamic model
-alone represents the acceleration plant.
-
-With `FW_GD_ACC_EN=1`, `FW_GD_ACC_BWR`, and `FW_GD_ACC_ZETA` select the target
-bandwidth ratio and damping ratio. The result is published on `fw_gain_design`
-as `tg_acc_p_gain` and `tg_acc_i_gain`. The fixed controller convention is:
-
-```
-q_sp = TG_ACC_P_GAIN * (a_sp - a_x)
-     + TG_ACC_I_GAIN * integral(a_sp - a_x)
-```
-
-Both recommended gains are required to be negative, as requested. A result is
-rejected if the measured pitch-rate-to-acceleration direction would require a
-positive gain, if the plant is not damped, excitation is inadequate, or the
-fit is poor. The module only reads and republishes `TG_ACC_I_LIM` and
-`TG_PITCH_R_LIM` when those custom parameters exist; they remain your safety
-limits and are never changed automatically.
-
 ### Coupled roll/yaw lateral-directional model
 
 With `FW_GD_LAT_EN=1` (the default), roll and yaw tests reconstruct sideslip
@@ -246,10 +214,6 @@ being falsely attributed entirely to `Cl_p`, `Cn_r`, or control effectiveness.
     If a result is rejected, inspect
     `identification_reject_reason[axis]` and the published candidate values;
     candidates are diagnostic only until `identification_valid` is true.
-    After a pitch test, also inspect `acceleration_identification_valid`,
-    `acceleration_fit`, `acceleration_a`, `acceleration_b`, and the negative
-    `tg_acc_p_gain` / `tg_acc_i_gain` recommendation before manually entering
-    the gains into your custom controller.
 5. Set only the tested axis' source to `1`. Review the generated gains. To
    schedule and apply those gains in flight, additionally enable the existing
    corresponding `FW_GD_APPLY_R`, `FW_GD_APPLY_P`, or `FW_GD_APPLY_Y` switch.

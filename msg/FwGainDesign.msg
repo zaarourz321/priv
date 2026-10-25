@@ -118,26 +118,6 @@ float32[3] identified_airflow_rate_b         # alpha/beta coupling from p/q/r [1
 float32[3] identified_airflow_control_b      # alpha/beta control coefficient [1/s]
 float32[3] identification_airflow_fit        # normalized RMS of alpha/beta fit, lower is better
 
-# Longitudinal acceleration controller identification and advisory PI design.
-# The plant is a_x_dot = acceleration_a * a_x + acceleration_b * q_sp,
-# identified during a pitch excitation. The controller convention is fixed:
-# it maps acceleration error to pitch-rate command, therefore valid gains are
-# negative. Results never write TG_* parameters.
-uint32 acceleration_identification_sample_count
-float32 identified_acceleration_airspeed      # [m/s]
-float32 acceleration_a                        # plant pole [1/s]
-float32 acceleration_b                        # forward acceleration response to q_sp [m/s^2/rad]
-float32 acceleration_aircraft_bw              # -acceleration_a [rad/s]
-float32 acceleration_fit                      # normalized RMS residual, lower is better
-bool acceleration_identification_valid
-float32 acceleration_cl_bw                    # requested closed-loop bandwidth [rad/s]
-float32 acceleration_cl_zeta                  # requested damping ratio [-]
-float32 tg_acc_p_gain                         # recommended negative TG_ACC_P_GAIN [rad/s per m/s^2]
-float32 tg_acc_i_gain                         # recommended negative TG_ACC_I_GAIN [rad/s^2 per m/s^2]
-float32 tg_acc_i_lim                          # current TG_ACC_I_LIM, if defined [0..1]
-float32 tg_pitch_r_lim                        # current TG_PITCH_R_LIM, if defined [rad/s]
-uint8 acceleration_status
-
 # Per-axis reason why a completed candidate was rejected. A value of VALID is
 # only meaningful when the corresponding identification_valid element is true.
 uint8[3] identification_reject_reason
