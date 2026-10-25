@@ -31,6 +31,15 @@ The existing aerodynamic parameters remain the manual model inputs. `FW_GD_R_SRC
   `FW_GD_CMDU`, or `FW_GD_CNR` / `FW_GD_CNDU`). This is the default.
 - `1` — The most recent valid in-flight estimate for that one axis.
 
+The manual model also accepts the coupled derivatives identified by the richer
+test model: `FW_GD_CLB`, `FW_GD_CLR`, `FW_GD_CMA`, `FW_GD_CNB`, and
+`FW_GD_CNP`. They map to `Cl_beta`, `Cl_r`, `Cm_alpha`, `Cn_beta`, and
+`Cn_p`, respectively, and are published as `manual_static_derivative` and
+`manual_cross_rate_derivative` beside the identified equivalents. This makes
+manual-versus-identified regression practical without changing the existing
+controller design: PX4's current rate PI calculation deliberately continues
+to use only the diagonal damping and control derivatives.
+
 An identified model exists in RAM only. It is published on `fw_gain_design`,
 but does not overwrite your manually entered derivatives or survive a reboot.
 That is intentional: an unreviewed flight estimate must not become a permanent

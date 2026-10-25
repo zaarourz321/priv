@@ -59,6 +59,11 @@ uint8[3] model_source
 uint8 MODEL_SOURCE_MANUAL = 0
 uint8 MODEL_SOURCE_FLIGHT_TEST = 1
 
+# Coupled manual-model inputs, published so they can be directly compared to
+# their identified equivalents. Axes are roll, pitch, yaw.
+float32[3] manual_static_derivative      # Cl_beta, Cm_alpha, Cn_beta
+float32[3] manual_cross_rate_derivative  # Cl_r, NaN, Cn_p
+
 # Flight-test excitation telemetry. Excitation is a bounded rate-setpoint
 # addition handled by fixed-wing attitude control; this module never publishes
 # a competing torque setpoint.

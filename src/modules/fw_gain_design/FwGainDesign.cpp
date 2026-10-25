@@ -165,6 +165,12 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 {
 	design.airspeed = true_airspeed;
 	design.px4_airspeed = NAN;
+	design.manual_static_derivative[ROLL] = _param_fw_gd_clb.get();
+	design.manual_static_derivative[PITCH] = _param_fw_gd_cma.get();
+	design.manual_static_derivative[YAW] = _param_fw_gd_cnb.get();
+	design.manual_cross_rate_derivative[ROLL] = _param_fw_gd_clr.get();
+	design.manual_cross_rate_derivative[PITCH] = NAN;
+	design.manual_cross_rate_derivative[YAW] = _param_fw_gd_cnp.get();
 
 	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
 		design.aircraft_rate_bw[axis] = NAN;
