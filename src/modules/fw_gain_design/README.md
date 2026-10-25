@@ -38,6 +38,32 @@ airframe parameter. If an estimated source is selected but no valid estimate
 exists, that axis is invalid and its live gains are restored rather than
 falling back silently to manual values.
 
+## Optional SD-card model persistence
+
+`FW_GD_SD_MODEL=0` is the default: identified models remain in RAM only. Set
+`FW_GD_SD_MODEL=1` to retain the latest validated model at:
+
+```
+/fs/microsd/fw_gain_design_model.bin
+```
+
+On startup the module retries loading that file while the SD card becomes
+available. It accepts only the current file version with a valid checksum and
+valid, stabilizing diagonal derivatives. Each later completed identification
+with at least one valid axis writes a complete replacement through a temporary
+file and atomic rename; a partial SD write will therefore not replace the last
+valid model.
+
+If you enable `FW_GD_SD_MODEL` after completing an identification, the module
+also saves the already validated in-RAM result; it does not require repeating
+the excitation.
+
+Loading is intentionally passive: it restores the in-RAM flight-test estimate
+only. It does **not** change `FW_GD_R_SRC`, `FW_GD_P_SRC`, or `FW_GD_Y_SRC`,
+and it does **not** enable any `FW_GD_APPLY_*` option. You must still review
+the restored output and explicitly select an estimated source before it can
+influence a gain design.
+
 ## Flight-test excitation and identification
 
 The module identifies the rate plant used by this gain designer. With the

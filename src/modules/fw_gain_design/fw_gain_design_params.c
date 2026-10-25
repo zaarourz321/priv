@@ -610,6 +610,20 @@ PARAM_DEFINE_INT32(FW_GD_P_SP_EN, 1);
 PARAM_DEFINE_INT32(FW_GD_LAT_EN, 1);
 
 /**
+ * Persist identified model on SD card
+ *
+ * When enabled, load the latest valid flight-identified aerodynamic model from
+ * /fs/microsd/fw_gain_design_model.bin when the module starts. Each completed
+ * excitation that produces a valid result atomically replaces that file.
+ * The feature does not select FW_GD_*_SRC or enable any FW_GD_APPLY_* switch;
+ * loading a model therefore never changes live controller gains by itself.
+ *
+ * @boolean
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_INT32(FW_GD_SD_MODEL, 0);
+
+/**
  * Minimum identification samples
  *
  * A completed test needs at least this many accepted samples before its

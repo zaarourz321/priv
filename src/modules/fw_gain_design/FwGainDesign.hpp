@@ -44,6 +44,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 
 #include <lib/parameters/param.h>
 #include <matrix/matrix/math.hpp>
@@ -106,6 +107,8 @@ private:
 	bool request_excitation(Axis axis);
 	void abort_excitation(uint8_t reason);
 	void fill_flight_test_status(fw_gain_design_s &design) const;
+	bool load_model_from_sd();
+	bool save_model_to_sd();
 	void apply_live_gains();
 	bool apply_axis(Axis axis, const fw_gain_design_s &design);
 	bool restore_axis(Axis axis);
@@ -159,9 +162,37 @@ private:
 		bool initialized{false};
 	};
 
+	// Stored on the SD card only when an excitation produces one or more
+	// validated axes. The file is versioned and checksummed before it is used.
+	struct PersistentModel {
+		uint32_t magic;
+		uint16_t version;
+		uint16_t size;
+		uint8_t valid_mask;
+		uint8_t coupled_mask;
+		uint8_t pitch_short_period;
+		uint8_t reserved;
+		float damping_derivative[AXIS_COUNT];
+		float control_derivative[AXIS_COUNT];
+		float rate_a[AXIS_COUNT];
+		float rate_b[AXIS_COUNT];
+		float airspeed[AXIS_COUNT];
+		float static_derivative[AXIS_COUNT];
+		float cross_rate_derivative[AXIS_COUNT];
+		float airflow_angle[AXIS_COUNT];
+		float airflow_rate_a[AXIS_COUNT];
+		float airflow_rate_b[AXIS_COUNT];
+		float airflow_control_b[AXIS_COUNT];
+		float airflow_fit[AXIS_COUNT];
+		float pitch_cm_alpha;
+		float pitch_angle_of_attack;
+		uint32_t checksum;
+	};
+
 	static bool update_rls(float theta[kMaxModelOrder], float covariance[kMaxModelOrder][kMaxModelOrder],
 			       const float phi[kMaxModelOrder], uint8_t model_order, float output,
 			       float forgetting_factor, float &fitted_output);
+	static uint32_t model_checksum(const PersistentModel &model);
 
 	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 	uORB::SubscriptionData<airspeed_validated_s> _airspeed_validated_sub{ORB_ID(airspeed_validated)};
@@ -199,6 +230,8 @@ private:
 	float _identification_airflow_fit[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_pitch_cm_alpha{NAN};
 	float _identified_pitch_angle_of_attack{NAN};
+	bool _identified_coupled_model[AXIS_COUNT] {};
+	bool _identified_pitch_short_period{false};
 	bool _identified_valid[AXIS_COUNT] {};
 	uint8_t _identification_reject_reason[AXIS_COUNT] {
 		fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN,
@@ -218,6 +251,12 @@ private:
 	float _excitation_duration{0.f};
 	float _excitation_rate_sp{0.f};
 	hrt_abstime _excitation_start{0};
+
+	bool _sd_model_loaded{false};
+	bool _sd_model_saved{false};
+	bool _sd_model_dirty{false};
+	hrt_abstime _last_sd_model_load_attempt{0};
+	hrt_abstime _last_sd_model_save_attempt{0};
 
 	// The test uses existing attitude/rate control. It adds this bounded rate
 	// setpoint only while the state below is RUNNING; it never publishes a
@@ -275,6 +314,7 @@ private:
 		(ParamFloat<px4::params::FW_GD_EST_DLY>) _param_fw_gd_est_dly,
 		(ParamInt<px4::params::FW_GD_P_SP_EN>) _param_fw_gd_p_sp_en,
 		(ParamInt<px4::params::FW_GD_LAT_EN>) _param_fw_gd_lat_en,
+		(ParamInt<px4::params::FW_GD_SD_MODEL>) _param_fw_gd_sd_model,
 		(ParamInt<px4::params::FW_GD_EST_MIN>) _param_fw_gd_est_min,
 		(ParamInt<px4::params::FW_GD_APPLY_R>) _param_fw_gd_apply_r,
 		(ParamInt<px4::params::FW_GD_APPLY_P>) _param_fw_gd_apply_p,

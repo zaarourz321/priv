@@ -38,10 +38,22 @@
 
 #include <cmath>
 #include <cstring>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #include <drivers/drv_hrt.h>
 #include <mathlib/mathlib.h>
 #include <px4_platform_common/defines.h>
+
+namespace
+{
+constexpr char kSdModelPath[] = "/fs/microsd/fw_gain_design_model.bin";
+constexpr char kSdModelTemporaryPath[] = "/fs/microsd/fw_gain_design_model.tmp";
+constexpr uint32_t kSdModelMagic = 0x46574744U; // "FWGD"
+constexpr uint16_t kSdModelVersion = 1;
+}
 
 FwGainDesign::FwGainDesign() :
 	ModuleParams(nullptr),
@@ -392,14 +404,192 @@ void FwGainDesign::reset_estimator(Axis axis)
 	_identified_airflow_rate_b[static_cast<uint8_t>(axis)] = NAN;
 	_identified_airflow_control_b[static_cast<uint8_t>(axis)] = NAN;
 	_identification_airflow_fit[static_cast<uint8_t>(axis)] = NAN;
+	_identified_coupled_model[static_cast<uint8_t>(axis)] = estimator.pitch_short_period || estimator.lateral_coupled;
 
 	if (axis == PITCH) {
 		_identified_pitch_cm_alpha = NAN;
 		_identified_pitch_angle_of_attack = NAN;
+		_identified_pitch_short_period = estimator.pitch_short_period;
 	}
 
 	_identification_reject_reason[static_cast<uint8_t>(axis)] = fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN;
 	_last_estimator_sample = 0;
+}
+
+uint32_t FwGainDesign::model_checksum(const PersistentModel &model)
+{
+	// FNV-1a across explicit fields only. This deliberately excludes any
+	// compiler-inserted padding from the on-card file integrity check.
+	uint32_t checksum = 2166136261U;
+	auto hash_bytes = [&checksum](const void *data, size_t length) {
+		const uint8_t *bytes = reinterpret_cast<const uint8_t *>(data);
+
+		for (size_t i = 0; i < length; ++i) {
+			checksum ^= bytes[i];
+			checksum *= 16777619U;
+		}
+	};
+
+	hash_bytes(&model.magic, sizeof(model.magic));
+	hash_bytes(&model.version, sizeof(model.version));
+	hash_bytes(&model.size, sizeof(model.size));
+	hash_bytes(&model.valid_mask, sizeof(model.valid_mask));
+	hash_bytes(&model.coupled_mask, sizeof(model.coupled_mask));
+	hash_bytes(&model.pitch_short_period, sizeof(model.pitch_short_period));
+	hash_bytes(&model.reserved, sizeof(model.reserved));
+	hash_bytes(model.damping_derivative, sizeof(model.damping_derivative));
+	hash_bytes(model.control_derivative, sizeof(model.control_derivative));
+	hash_bytes(model.rate_a, sizeof(model.rate_a));
+	hash_bytes(model.rate_b, sizeof(model.rate_b));
+	hash_bytes(model.airspeed, sizeof(model.airspeed));
+	hash_bytes(model.static_derivative, sizeof(model.static_derivative));
+	hash_bytes(model.cross_rate_derivative, sizeof(model.cross_rate_derivative));
+	hash_bytes(model.airflow_angle, sizeof(model.airflow_angle));
+	hash_bytes(model.airflow_rate_a, sizeof(model.airflow_rate_a));
+	hash_bytes(model.airflow_rate_b, sizeof(model.airflow_rate_b));
+	hash_bytes(model.airflow_control_b, sizeof(model.airflow_control_b));
+	hash_bytes(model.airflow_fit, sizeof(model.airflow_fit));
+	hash_bytes(&model.pitch_cm_alpha, sizeof(model.pitch_cm_alpha));
+	hash_bytes(&model.pitch_angle_of_attack, sizeof(model.pitch_angle_of_attack));
+
+	return checksum;
+}
+
+bool FwGainDesign::load_model_from_sd()
+{
+	const int fd = ::open(kSdModelPath, O_RDONLY);
+
+	if (fd < 0) {
+		return false;
+	}
+
+	PersistentModel model{};
+	const ssize_t bytes_read = ::read(fd, &model, sizeof(model));
+	const int close_result = ::close(fd);
+
+	if (bytes_read != static_cast<ssize_t>(sizeof(model)) || close_result != 0
+	    || model.magic != kSdModelMagic || model.version != kSdModelVersion
+	    || model.size != sizeof(PersistentModel) || model.checksum != model_checksum(model)
+	    || (model.valid_mask & ~((1U << AXIS_COUNT) - 1U)) != 0 || model.valid_mask == 0) {
+		return false;
+	}
+
+	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+		const uint8_t axis_mask = 1U << axis;
+
+		if ((model.valid_mask & axis_mask) != 0) {
+			if (!PX4_ISFINITE(model.damping_derivative[axis]) || !PX4_ISFINITE(model.control_derivative[axis])
+			    || !PX4_ISFINITE(model.rate_a[axis]) || !PX4_ISFINITE(model.rate_b[axis])
+			    || !PX4_ISFINITE(model.airspeed[axis]) || model.damping_derivative[axis] >= 0.f
+			    || model.control_derivative[axis] <= 0.f || model.rate_a[axis] >= -0.02f
+			    || model.rate_b[axis] <= 0.f || model.airspeed[axis] <= 0.f) {
+				return false;
+			}
+
+			_identified_valid[axis] = true;
+			_identified_damping_derivative[axis] = model.damping_derivative[axis];
+			_identified_control_derivative[axis] = model.control_derivative[axis];
+			_identified_rate_a[axis] = model.rate_a[axis];
+			_identified_rate_b[axis] = model.rate_b[axis];
+			_identified_airspeed[axis] = model.airspeed[axis];
+			_identified_static_derivative[axis] = model.static_derivative[axis];
+			_identified_cross_rate_derivative[axis] = model.cross_rate_derivative[axis];
+			_identified_airflow_angle[axis] = model.airflow_angle[axis];
+			_identified_airflow_rate_a[axis] = model.airflow_rate_a[axis];
+			_identified_airflow_rate_b[axis] = model.airflow_rate_b[axis];
+			_identified_airflow_control_b[axis] = model.airflow_control_b[axis];
+			_identification_airflow_fit[axis] = model.airflow_fit[axis];
+			_identified_coupled_model[axis] = (model.coupled_mask & axis_mask) != 0;
+
+		} else {
+			_identified_valid[axis] = false;
+			_identified_damping_derivative[axis] = NAN;
+			_identified_control_derivative[axis] = NAN;
+			_identified_rate_a[axis] = NAN;
+			_identified_rate_b[axis] = NAN;
+			_identified_airspeed[axis] = NAN;
+			_identified_static_derivative[axis] = NAN;
+			_identified_cross_rate_derivative[axis] = NAN;
+			_identified_airflow_angle[axis] = NAN;
+			_identified_airflow_rate_a[axis] = NAN;
+			_identified_airflow_rate_b[axis] = NAN;
+			_identified_airflow_control_b[axis] = NAN;
+			_identification_airflow_fit[axis] = NAN;
+			_identified_coupled_model[axis] = false;
+		}
+	}
+
+	_identified_pitch_short_period = model.pitch_short_period != 0;
+	_identified_pitch_cm_alpha = model.pitch_cm_alpha;
+	_identified_pitch_angle_of_attack = model.pitch_angle_of_attack;
+	_sd_model_loaded = true;
+	_sd_model_dirty = false;
+	_calculation_id++;
+	PX4_INFO("loaded identified model from SD card");
+	return true;
+}
+
+bool FwGainDesign::save_model_to_sd()
+{
+	if (_param_fw_gd_sd_model.get() == 0) {
+		return false;
+	}
+
+	PersistentModel model{};
+	model.magic = kSdModelMagic;
+	model.version = kSdModelVersion;
+	model.size = static_cast<uint16_t>(sizeof(PersistentModel));
+	model.pitch_short_period = _identified_pitch_short_period ? 1U : 0U;
+	model.pitch_cm_alpha = _identified_pitch_cm_alpha;
+	model.pitch_angle_of_attack = _identified_pitch_angle_of_attack;
+
+	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+		if (!_identified_valid[axis]) {
+			continue;
+		}
+
+		const uint8_t axis_mask = 1U << axis;
+		model.valid_mask |= axis_mask;
+		model.coupled_mask |= _identified_coupled_model[axis] ? axis_mask : 0U;
+		model.damping_derivative[axis] = _identified_damping_derivative[axis];
+		model.control_derivative[axis] = _identified_control_derivative[axis];
+		model.rate_a[axis] = _identified_rate_a[axis];
+		model.rate_b[axis] = _identified_rate_b[axis];
+		model.airspeed[axis] = _identified_airspeed[axis];
+		model.static_derivative[axis] = _identified_static_derivative[axis];
+		model.cross_rate_derivative[axis] = _identified_cross_rate_derivative[axis];
+		model.airflow_angle[axis] = _identified_airflow_angle[axis];
+		model.airflow_rate_a[axis] = _identified_airflow_rate_a[axis];
+		model.airflow_rate_b[axis] = _identified_airflow_rate_b[axis];
+		model.airflow_control_b[axis] = _identified_airflow_control_b[axis];
+		model.airflow_fit[axis] = _identification_airflow_fit[axis];
+	}
+
+	if (model.valid_mask == 0) {
+		return false;
+	}
+
+	model.checksum = model_checksum(model);
+	const int fd = ::open(kSdModelTemporaryPath, O_WRONLY | O_CREAT | O_TRUNC, PX4_O_MODE_666);
+
+	if (fd < 0) {
+		return false;
+	}
+
+	const ssize_t bytes_written = ::write(fd, &model, sizeof(model));
+	const int sync_result = bytes_written == static_cast<ssize_t>(sizeof(model)) ? ::fsync(fd) : -1;
+	const int close_result = ::close(fd);
+
+	if (bytes_written != static_cast<ssize_t>(sizeof(model)) || sync_result != 0 || close_result != 0
+	    || ::rename(kSdModelTemporaryPath, kSdModelPath) != 0) {
+		::unlink(kSdModelTemporaryPath);
+		return false;
+	}
+
+	_sd_model_saved = true;
+	_sd_model_dirty = false;
+	PX4_INFO("saved identified model to SD card");
+	return true;
 }
 
 bool FwGainDesign::update_rls(float theta[kMaxModelOrder], float covariance[kMaxModelOrder][kMaxModelOrder],
@@ -769,6 +959,15 @@ void FwGainDesign::finalize_estimate(Axis axis)
 
 	_identified_valid[axis_index] = true;
 	_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_VALID;
+	_sd_model_dirty = true;
+
+	if (_param_fw_gd_sd_model.get() != 0) {
+		_last_sd_model_save_attempt = hrt_absolute_time();
+
+		if (!save_model_to_sd()) {
+			PX4_WARN("could not save identified model to SD card");
+		}
+	}
 }
 
 bool FwGainDesign::estimate_airflow_angles(float &angle_of_attack, float &sideslip) const
@@ -1041,7 +1240,7 @@ void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
 		design.identified_rate_b[axis] = _identified_rate_b[axis];
 		design.identified_damping_derivative[axis] = _identified_damping_derivative[axis];
 		design.identified_control_derivative[axis] = _identified_control_derivative[axis];
-		design.identified_coupled_model[axis] = _estimator[axis].pitch_short_period || _estimator[axis].lateral_coupled;
+		design.identified_coupled_model[axis] = _identified_coupled_model[axis];
 		design.identified_airflow_angle[axis] = _identified_airflow_angle[axis];
 		design.identified_static_derivative[axis] = _identified_static_derivative[axis];
 		design.identified_cross_rate_derivative[axis] = _identified_cross_rate_derivative[axis];
@@ -1066,7 +1265,7 @@ void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
 		design.identification_reject_reason[axis] = _identification_reject_reason[axis];
 	}
 
-	design.identified_pitch_short_period = _estimator[PITCH].pitch_short_period;
+	design.identified_pitch_short_period = _identified_pitch_short_period;
 	design.identified_pitch_cm_alpha = _identified_pitch_cm_alpha;
 	design.identified_pitch_angle_of_attack = _identified_pitch_angle_of_attack;
 
@@ -1316,6 +1515,26 @@ void FwGainDesign::Run()
 		reset_schedule();
 	}
 
+	// The SD card may mount after this module starts. Retry quietly while the
+	// opt-in persistence setting is enabled, but never overwrite parameters or
+	// enable a model source merely because a file was found.
+	if (_param_fw_gd_sd_model.get() != 0 && !_sd_model_loaded
+	    && (_last_sd_model_load_attempt == 0 || hrt_elapsed_time(&_last_sd_model_load_attempt) > 2_s)) {
+		_last_sd_model_load_attempt = hrt_absolute_time();
+		load_model_from_sd();
+	}
+
+	// Enabling persistence after a completed identification also saves that
+	// in-RAM model. Failed SD writes retry slowly, never from the control path.
+	if (_param_fw_gd_sd_model.get() != 0 && _sd_model_dirty
+	    && (_last_sd_model_save_attempt == 0 || hrt_elapsed_time(&_last_sd_model_save_attempt) > 2_s)) {
+		_last_sd_model_save_attempt = hrt_absolute_time();
+
+		if (!save_model_to_sd()) {
+			PX4_WARN("could not save identified model to SD card");
+		}
+	}
+
 	update_flight_test();
 	apply_live_gains();
 	publish_next_design_point();
@@ -1398,6 +1617,8 @@ int FwGainDesign::print_status()
 			 (unsigned)(_speed_index + 1U), (unsigned)_speed_count);
 	PX4_INFO("live apply: roll %s, pitch %s, yaw %s", apply_enabled(ROLL) ? "enabled" : "disabled",
 		 apply_enabled(PITCH) ? "enabled" : "disabled", apply_enabled(YAW) ? "enabled" : "disabled");
+	PX4_INFO("SD model: %s, loaded %s, saved %s", _param_fw_gd_sd_model.get() != 0 ? "enabled" : "disabled",
+		 _sd_model_loaded ? "yes" : "no", _sd_model_saved ? "yes" : "no");
 	PX4_INFO("excitation: state %u axis %u samples %u", (unsigned)_excitation_state,
 		 (unsigned)_excitation_axis, (unsigned)_estimator[static_cast<uint8_t>(_excitation_axis)].sample_count);
 	return PX4_OK;
