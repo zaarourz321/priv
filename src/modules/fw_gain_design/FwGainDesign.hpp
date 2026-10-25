@@ -62,6 +62,7 @@
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
+#include <uORB/topics/vehicle_acceleration.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_control_mode.h>
 #include <uORB/topics/vehicle_land_detected.h>
@@ -102,6 +103,10 @@ private:
 	void update_estimator(Axis axis, float rate, float cross_rate, float control_input, float angle_of_attack, float sideslip,
 			      float true_airspeed, float dt);
 	void finalize_estimate(Axis axis);
+	void reset_acceleration_estimator();
+	void update_acceleration_estimator(float forward_acceleration, float pitch_rate_setpoint, float true_airspeed, float dt);
+	void finalize_acceleration_estimate();
+	void calculate_acceleration_design(fw_gain_design_s &design) const;
 	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
 	bool estimate_airflow_angles(float &angle_of_attack, float &sideslip) const;
 	bool pitch_surface_input(float &control_input) const;
@@ -166,6 +171,28 @@ private:
 		bool initialized{false};
 	};
 
+	// Longitudinal acceleration plant identified while the bounded pitch-rate
+	// excitation is active: a_x_dot = a * a_x + b * q_sp + offset.
+	// The acceleration controller under design maps acceleration error to q_sp.
+	struct AccelerationEstimator {
+		float theta[kMaxModelOrder] {};
+		float covariance[kMaxModelOrder][kMaxModelOrder] {};
+		float residual_sum_sq{0.f};
+		float output_sum_sq{0.f};
+		float output_sum{0.f};
+		float command_sum{0.f};
+		float command_sum_sq{0.f};
+		float airspeed_sum{0.f};
+		float dt_sum{0.f};
+		float filtered_acceleration{NAN};
+		float previous_filtered_acceleration{NAN};
+		float filtered_pitch_rate_setpoint{NAN};
+		uint32_t sample_count{0};
+		uint32_t fit_sample_count{0};
+		bool filters_initialized{false};
+		bool initialized{false};
+	};
+
 	// Stored on the SD card only when an excitation produces one or more
 	// validated axes. The file is versioned and checksummed before it is used.
 	struct PersistentModel {
@@ -203,6 +230,7 @@ private:
 	uORB::SubscriptionData<actuator_armed_s> _actuator_armed_sub{ORB_ID(actuator_armed)};
 	uORB::SubscriptionData<actuator_servos_s> _actuator_servos_sub{ORB_ID(actuator_servos)};
 	uORB::SubscriptionData<vehicle_angular_velocity_s> _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
+	uORB::SubscriptionData<vehicle_acceleration_s> _vehicle_acceleration_sub{ORB_ID(vehicle_acceleration)};
 	uORB::SubscriptionData<vehicle_attitude_s> _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::SubscriptionData<vehicle_torque_setpoint_s> _vehicle_torque_setpoint_sub{ORB_ID(vehicle_torque_setpoint)};
 	uORB::SubscriptionData<vehicle_local_position_s> _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
@@ -222,6 +250,13 @@ private:
 	hrt_abstime _last_estimator_sample{0};
 
 	RateEstimator _estimator[AXIS_COUNT] {};
+	AccelerationEstimator _acceleration_estimator{};
+	float _identified_acceleration_a{NAN};
+	float _identified_acceleration_b{NAN};
+	float _identified_acceleration_airspeed{NAN};
+	float _identified_acceleration_fit{NAN};
+	bool _identified_acceleration_valid{false};
+	uint8_t _acceleration_status{fw_gain_design_s::AXIS_STATUS_INVALID_INPUT};
 	float _identified_damping_derivative[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_control_derivative[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_rate_a[AXIS_COUNT] {NAN, NAN, NAN};
@@ -276,6 +311,8 @@ private:
 	param_t _attitude_tc_param[AXIS_COUNT] {PARAM_INVALID, PARAM_INVALID, PARAM_INVALID};
 	param_t _control_surface_count_param{PARAM_INVALID};
 	param_t _control_surface_type_param[actuator_servos_s::NUM_CONTROLS] {};
+	param_t _tg_acc_i_lim_param{PARAM_INVALID};
+	param_t _tg_pitch_r_lim_param{PARAM_INVALID};
 	int8_t _pitch_surface_index{-1};
 	float _baseline_rate_p[AXIS_COUNT] {NAN, NAN, NAN};
 	float _baseline_rate_i[AXIS_COUNT] {NAN, NAN, NAN};
@@ -332,6 +369,9 @@ private:
 		(ParamInt<px4::params::FW_GD_LAT_EN>) _param_fw_gd_lat_en,
 		(ParamInt<px4::params::FW_GD_SD_MODEL>) _param_fw_gd_sd_model,
 		(ParamInt<px4::params::FW_GD_EST_MIN>) _param_fw_gd_est_min,
+		(ParamInt<px4::params::FW_GD_ACC_EN>) _param_fw_gd_acc_en,
+		(ParamFloat<px4::params::FW_GD_ACC_BWR>) _param_fw_gd_acc_bwr,
+		(ParamFloat<px4::params::FW_GD_ACC_ZETA>) _param_fw_gd_acc_zeta,
 		(ParamInt<px4::params::FW_GD_APPLY_R>) _param_fw_gd_apply_r,
 		(ParamInt<px4::params::FW_GD_APPLY_P>) _param_fw_gd_apply_p,
 		(ParamInt<px4::params::FW_GD_APPLY_Y>) _param_fw_gd_apply_y,

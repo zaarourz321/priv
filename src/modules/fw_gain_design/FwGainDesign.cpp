@@ -71,6 +71,8 @@ FwGainDesign::FwGainDesign() :
 	_attitude_tc_param[ROLL] = param_find("FW_R_TC");
 	_attitude_tc_param[PITCH] = param_find("FW_P_TC");
 	_control_surface_count_param = param_find("CA_SV_CS_COUNT");
+	_tg_acc_i_lim_param = param_find("TG_ACC_I_LIM");
+	_tg_pitch_r_lim_param = param_find("TG_PITCH_R_LIM");
 
 	for (uint8_t index = 0; index < actuator_servos_s::NUM_CONTROLS; ++index) {
 		char parameter_name[20];
@@ -472,6 +474,195 @@ void FwGainDesign::reset_estimator(Axis axis)
 
 	_identification_reject_reason[static_cast<uint8_t>(axis)] = fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN;
 	_last_estimator_sample = 0;
+}
+
+void FwGainDesign::reset_acceleration_estimator()
+{
+	_acceleration_estimator = {};
+
+	for (uint8_t i = 0; i < 3; ++i) {
+		_acceleration_estimator.covariance[i][i] = 1e3f;
+	}
+
+	_acceleration_estimator.initialized = _param_fw_gd_acc_en.get() != 0;
+	_identified_acceleration_a = NAN;
+	_identified_acceleration_b = NAN;
+	_identified_acceleration_airspeed = NAN;
+	_identified_acceleration_fit = NAN;
+	_identified_acceleration_valid = false;
+	_acceleration_status = _param_fw_gd_acc_en.get() != 0 ?
+			       fw_gain_design_s::AXIS_STATUS_INVALID_INPUT : fw_gain_design_s::AXIS_STATUS_INVALID_DESIGN;
+}
+
+void FwGainDesign::update_acceleration_estimator(float forward_acceleration, float pitch_rate_setpoint, float true_airspeed,
+		float dt)
+{
+	AccelerationEstimator &estimator = _acceleration_estimator;
+
+	if (!estimator.initialized || !PX4_ISFINITE(forward_acceleration) || !PX4_ISFINITE(pitch_rate_setpoint)
+	    || !PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f
+	    || !PX4_ISFINITE(dt) || dt <= 0.f) {
+		return;
+	}
+
+	const float time_constant = _param_fw_gd_est_tc.get();
+	const float filter_cutoff_hz = _param_fw_gd_est_fc.get();
+
+	if (!PX4_ISFINITE(time_constant) || time_constant <= dt || !PX4_ISFINITE(filter_cutoff_hz)
+	    || filter_cutoff_hz <= 0.f) {
+		return;
+	}
+
+	const float filter_time_constant = 1.f / (2.f * M_PI_F * filter_cutoff_hz);
+	const float filter_alpha = math::constrain(dt / (dt + filter_time_constant), 0.001f, 0.95f);
+
+	if (!estimator.filters_initialized) {
+		estimator.filtered_acceleration = forward_acceleration;
+		estimator.previous_filtered_acceleration = forward_acceleration;
+		estimator.filtered_pitch_rate_setpoint = pitch_rate_setpoint;
+		estimator.filters_initialized = true;
+		return;
+	}
+
+	estimator.filtered_acceleration += filter_alpha * (forward_acceleration - estimator.filtered_acceleration);
+	estimator.filtered_pitch_rate_setpoint += filter_alpha * (pitch_rate_setpoint - estimator.filtered_pitch_rate_setpoint);
+
+	float phi[kMaxModelOrder] {};
+	phi[0] = estimator.previous_filtered_acceleration;
+	phi[1] = estimator.filtered_pitch_rate_setpoint;
+	phi[2] = 1.f;
+	float fitted_acceleration = 0.f;
+	const float forgetting_factor = math::constrain(1.f - dt / time_constant, 0.95f, 0.9999f);
+
+	if (!update_rls(estimator.theta, estimator.covariance, phi, 3, estimator.filtered_acceleration,
+			forgetting_factor, fitted_acceleration)) {
+		return;
+	}
+
+	if (estimator.sample_count >= kEstimatorWarmupSamples) {
+		const float residual = estimator.filtered_acceleration - fitted_acceleration;
+		estimator.residual_sum_sq += residual * residual;
+		estimator.output_sum_sq += estimator.filtered_acceleration * estimator.filtered_acceleration;
+		estimator.output_sum += estimator.filtered_acceleration;
+		estimator.fit_sample_count++;
+	}
+
+	estimator.command_sum += estimator.filtered_pitch_rate_setpoint;
+	estimator.command_sum_sq += estimator.filtered_pitch_rate_setpoint * estimator.filtered_pitch_rate_setpoint;
+	estimator.airspeed_sum += true_airspeed;
+	estimator.dt_sum += dt;
+	estimator.sample_count++;
+	estimator.previous_filtered_acceleration = estimator.filtered_acceleration;
+}
+
+void FwGainDesign::finalize_acceleration_estimate()
+{
+	const AccelerationEstimator &estimator = _acceleration_estimator;
+	const float min_samples = static_cast<float>(_param_fw_gd_est_min.get());
+
+	if (!estimator.initialized || estimator.sample_count < min_samples || estimator.fit_sample_count == 0) {
+		_acceleration_status = fw_gain_design_s::AXIS_STATUS_INVALID_INPUT;
+		return;
+	}
+
+	const float mean_dt = estimator.dt_sum / estimator.sample_count;
+	const float plant_a = PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? (estimator.theta[0] - 1.f) / mean_dt : NAN;
+	const float plant_b = PX4_ISFINITE(mean_dt) && mean_dt > 0.f ? estimator.theta[1] / mean_dt : NAN;
+	const float command_mean = estimator.command_sum / estimator.sample_count;
+	const float command_variance = estimator.command_sum_sq / estimator.sample_count - command_mean * command_mean;
+	const float output_mean = estimator.output_sum / estimator.fit_sample_count;
+	const float output_variance = fmaxf(estimator.output_sum_sq / estimator.fit_sample_count - output_mean * output_mean, 0.f);
+	const float fit = sqrtf(estimator.residual_sum_sq / estimator.fit_sample_count)
+			  / fmaxf(sqrtf(output_variance), 0.05f);
+
+	_identified_acceleration_a = plant_a;
+	_identified_acceleration_b = plant_b;
+	_identified_acceleration_airspeed = estimator.airspeed_sum / estimator.sample_count;
+	_identified_acceleration_fit = fit;
+
+	if (!PX4_ISFINITE(plant_a) || !PX4_ISFINITE(plant_b) || !PX4_ISFINITE(fit)) {
+		_acceleration_status = fw_gain_design_s::AXIS_STATUS_NONFINITE_RESULT;
+		return;
+	}
+
+	if (plant_a >= -0.02f) {
+		_acceleration_status = fw_gain_design_s::AXIS_STATUS_NOT_DAMPED;
+		return;
+	}
+
+	// User-defined controller convention: positive pitch rate must reduce the
+	// controlled forward acceleration, therefore both PI gains are negative.
+	if (plant_b >= 0.f) {
+		_acceleration_status = fw_gain_design_s::AXIS_STATUS_NO_CONTROL_AUTHORITY;
+		return;
+	}
+
+	if (command_variance < 1e-6f || fit > 0.5f) {
+		_acceleration_status = fw_gain_design_s::AXIS_STATUS_INVALID_DESIGN;
+		return;
+	}
+
+	_identified_acceleration_valid = true;
+	_acceleration_status = fw_gain_design_s::AXIS_STATUS_VALID;
+}
+
+void FwGainDesign::calculate_acceleration_design(fw_gain_design_s &design) const
+{
+	design.acceleration_identification_sample_count = _acceleration_estimator.sample_count;
+	design.identified_acceleration_airspeed = _identified_acceleration_airspeed;
+	design.acceleration_a = _identified_acceleration_a;
+	design.acceleration_b = _identified_acceleration_b;
+	design.acceleration_aircraft_bw = PX4_ISFINITE(_identified_acceleration_a) ? -_identified_acceleration_a : NAN;
+	design.acceleration_fit = _identified_acceleration_fit;
+	design.acceleration_identification_valid = _identified_acceleration_valid;
+	design.acceleration_cl_bw = NAN;
+	design.acceleration_cl_zeta = _param_fw_gd_acc_zeta.get();
+	design.tg_acc_p_gain = NAN;
+	design.tg_acc_i_gain = NAN;
+	design.tg_acc_i_lim = NAN;
+	design.tg_pitch_r_lim = NAN;
+	design.acceleration_status = _acceleration_status;
+
+	if (_tg_acc_i_lim_param != PARAM_INVALID) {
+		param_get(_tg_acc_i_lim_param, &design.tg_acc_i_lim);
+	}
+
+	if (_tg_pitch_r_lim_param != PARAM_INVALID) {
+		param_get(_tg_pitch_r_lim_param, &design.tg_pitch_r_lim);
+	}
+
+	if (_param_fw_gd_acc_en.get() == 0 || !_identified_acceleration_valid) {
+		return;
+	}
+
+	const float aircraft_bw = -_identified_acceleration_a;
+	const float bandwidth_ratio = _param_fw_gd_acc_bwr.get();
+	const float damping_ratio = _param_fw_gd_acc_zeta.get();
+
+	if (!PX4_ISFINITE(aircraft_bw) || !PX4_ISFINITE(bandwidth_ratio) || !PX4_ISFINITE(damping_ratio)
+	    || aircraft_bw <= 0.f || bandwidth_ratio <= 0.f || damping_ratio <= 0.f) {
+		design.acceleration_status = fw_gain_design_s::AXIS_STATUS_INVALID_DESIGN;
+		return;
+	}
+
+	const float closed_loop_bw = bandwidth_ratio * aircraft_bw;
+	// Plant: a_dot = plant_a * a + plant_b * q_sp. For controller
+	// q_sp = Kp * (a_sp - a) + Ki * integral(a_sp - a), matching
+	// s^2 + 2*zeta*wc*s + wc^2 yields these gains. plant_b is negative,
+	// consequently both valid gains are negative under the requested convention.
+	const float p_gain = (2.f * damping_ratio * closed_loop_bw + _identified_acceleration_a)
+			     / _identified_acceleration_b;
+	const float i_gain = closed_loop_bw * closed_loop_bw / _identified_acceleration_b;
+
+	if (!PX4_ISFINITE(p_gain) || !PX4_ISFINITE(i_gain) || p_gain >= 0.f || i_gain >= 0.f) {
+		design.acceleration_status = fw_gain_design_s::AXIS_STATUS_INVALID_DESIGN;
+		return;
+	}
+
+	design.acceleration_cl_bw = closed_loop_bw;
+	design.tg_acc_p_gain = p_gain;
+	design.tg_acc_i_gain = i_gain;
+	design.acceleration_status = fw_gain_design_s::AXIS_STATUS_VALID;
 }
 
 uint32_t FwGainDesign::model_checksum(const PersistentModel &model)
@@ -1156,6 +1347,7 @@ void FwGainDesign::update_flight_test()
 	_actuator_armed_sub.update();
 	_airspeed_validated_sub.update();
 	_vehicle_angular_velocity_sub.update();
+	_vehicle_acceleration_sub.update();
 	_actuator_servos_sub.update();
 	_vehicle_attitude_sub.update();
 	_vehicle_torque_setpoint_sub.update();
@@ -1225,6 +1417,10 @@ void FwGainDesign::update_flight_test()
 		}
 
 		reset_estimator(_excitation_axis);
+
+		if (_excitation_axis == PITCH) {
+			reset_acceleration_estimator();
+		}
 		_excitation_start = hrt_absolute_time();
 		_excitation_state = fw_gain_design_s::EXCITATION_STATE_RUNNING;
 		_excitation_abort_reason = fw_gain_design_s::EXCITATION_ABORT_NONE;
@@ -1265,6 +1461,11 @@ void FwGainDesign::update_flight_test()
 	if (elapsed >= _excitation_duration) {
 		_excitation_rate_sp = 0.f;
 		finalize_estimate(_excitation_axis);
+
+		if (_excitation_axis == PITCH) {
+			finalize_acceleration_estimate();
+		}
+
 		_excitation_state = fw_gain_design_s::EXCITATION_STATE_COMPLETE;
 		_calculation_id++;
 		return;
@@ -1313,6 +1514,14 @@ void FwGainDesign::update_flight_test()
 		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid) {
 			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], cross_rate,
 					 control_input, angle_of_attack, sideslip, true_airspeed, dt);
+
+			if (_excitation_axis == PITCH && hrt_elapsed_time(&_vehicle_acceleration_sub.get().timestamp) < 100_ms) {
+				// vehicle_acceleration is the bias-corrected FRD body acceleration,
+				// including gravity: use its forward component exactly as a
+				// longitudinal acceleration controller normally observes it.
+				update_acceleration_estimator(_vehicle_acceleration_sub.get().xyz[0], _excitation_rate_sp,
+							      true_airspeed, dt);
+			}
 		}
 	}
 
@@ -1397,6 +1606,7 @@ void FwGainDesign::publish_next_design_point()
 	}
 
 	fill_flight_test_status(design);
+	calculate_acceleration_design(design);
 
 	_gain_design_pub.publish(design);
 }
