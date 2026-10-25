@@ -57,7 +57,7 @@ constexpr uint16_t kSdModelVersion = 5;
 
 FwGainDesign::FwGainDesign() :
 	ModuleParams(nullptr),
-	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::lp_default)
+	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::fw_gain_design)
 {
 	_rate_p_param[ROLL] = param_find("FW_RR_P");
 	_rate_p_param[PITCH] = param_find("FW_PR_P");

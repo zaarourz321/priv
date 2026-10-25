@@ -91,6 +91,11 @@ static constexpr wq_config_t ttyUnknown{"wq:ttyUnknown", 1728, -32};
 
 static constexpr wq_config_t lp_default{"wq:lp_default", 1920, -50};
 
+// Flight-model identification performs harmonic fitting and a coupled
+// least-squares solve. Keep it off the shared low-priority queue: its stack is
+// intentionally small and is also used by housekeeping modules.
+static constexpr wq_config_t fw_gain_design{"wq:fw_gain_design", 3000, -49};
+
 static constexpr wq_config_t test1{"wq:test1", 2000, 0};
 static constexpr wq_config_t test2{"wq:test2", 2000, 0};
 
