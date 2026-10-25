@@ -67,7 +67,6 @@
 #include <uORB/topics/vehicle_land_detected.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_status.h>
-#include <uORB/topics/vehicle_torque_setpoint.h>
 #include <uORB/topics/wind.h>
 
 using namespace time_literals;
@@ -104,8 +103,8 @@ private:
 	void finalize_estimate(Axis axis);
 	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
 	bool estimate_airflow_angles(float &angle_of_attack, float &sideslip) const;
-	bool pitch_surface_input(float &control_input) const;
-	void update_pitch_surface_index();
+	bool control_surface_input(Axis axis, float &control_input) const;
+	void update_control_surface_mapping();
 	bool model_source_is_estimated(Axis axis) const;
 	bool estimate_valid(Axis axis) const;
 	bool request_excitation(Axis axis);
@@ -128,9 +127,8 @@ private:
 
 	struct RateEstimator {
 		// Regular axes use rate[k] = A * rate[k-1] + B * command[k-delay] + offset.
-		// Pitch directly fits q_dot = M_alpha * alpha + M_q * q + M_delta * delta
-		// from equally filtered states. This avoids discrete-to-continuous coupling
-		// bias between Cmalpha and Cmq. The lateral model uses beta/p/r.
+		// Each axis uses a simple discrete SISO rate model with an allocated
+		// physical control-surface command as input.
 		float theta[kMaxModelOrder] {};
 		float covariance[kMaxModelOrder][kMaxModelOrder] {};
 		float airflow_theta[kMaxModelOrder] {};
@@ -204,7 +202,6 @@ private:
 	uORB::SubscriptionData<actuator_servos_s> _actuator_servos_sub{ORB_ID(actuator_servos)};
 	uORB::SubscriptionData<vehicle_angular_velocity_s> _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
 	uORB::SubscriptionData<vehicle_attitude_s> _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
-	uORB::SubscriptionData<vehicle_torque_setpoint_s> _vehicle_torque_setpoint_sub{ORB_ID(vehicle_torque_setpoint)};
 	uORB::SubscriptionData<vehicle_local_position_s> _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
 	uORB::SubscriptionData<vehicle_status_s> _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::SubscriptionData<vehicle_control_mode_s> _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
@@ -255,7 +252,6 @@ private:
 	float _excitation_amplitude{0.f};
 	float _excitation_frequency{0.f};
 	float _excitation_duration{0.f};
-	int32_t _excitation_mode{0};
 	float _excitation_rate_sp{0.f};
 	hrt_abstime _excitation_start{0};
 
@@ -276,7 +272,9 @@ private:
 	param_t _attitude_tc_param[AXIS_COUNT] {PARAM_INVALID, PARAM_INVALID, PARAM_INVALID};
 	param_t _control_surface_count_param{PARAM_INVALID};
 	param_t _control_surface_type_param[actuator_servos_s::NUM_CONTROLS] {};
-	int8_t _pitch_surface_index{-1};
+	param_t _control_surface_torque_param[actuator_servos_s::NUM_CONTROLS][AXIS_COUNT] {};
+	float _control_surface_weight[AXIS_COUNT][actuator_servos_s::NUM_CONTROLS] {};
+	bool _control_surface_available[AXIS_COUNT] {};
 	float _baseline_rate_p[AXIS_COUNT] {NAN, NAN, NAN};
 	float _baseline_rate_i[AXIS_COUNT] {NAN, NAN, NAN};
 	float _baseline_rate_ff[AXIS_COUNT] {NAN, NAN, NAN};
@@ -322,14 +320,11 @@ private:
 		(ParamInt<px4::params::FW_GD_EXC_AXIS>) _param_fw_gd_exc_axis,
 		(ParamFloat<px4::params::FW_GD_EXC_AMP>) _param_fw_gd_exc_amp,
 		(ParamFloat<px4::params::FW_GD_EXC_FREQ>) _param_fw_gd_exc_freq,
-		(ParamInt<px4::params::FW_GD_EXC_MODE>) _param_fw_gd_exc_mode,
 		(ParamFloat<px4::params::FW_GD_EXC_TIME>) _param_fw_gd_exc_time,
 		(ParamFloat<px4::params::FW_GD_EXC_RMAX>) _param_fw_gd_exc_rmax,
 		(ParamFloat<px4::params::FW_GD_EST_TC>) _param_fw_gd_est_tc,
 		(ParamFloat<px4::params::FW_GD_EST_FC>) _param_fw_gd_est_fc,
 		(ParamFloat<px4::params::FW_GD_EST_DLY>) _param_fw_gd_est_dly,
-		(ParamInt<px4::params::FW_GD_P_SP_EN>) _param_fw_gd_p_sp_en,
-		(ParamInt<px4::params::FW_GD_LAT_EN>) _param_fw_gd_lat_en,
 		(ParamInt<px4::params::FW_GD_SD_MODEL>) _param_fw_gd_sd_model,
 		(ParamInt<px4::params::FW_GD_EST_MIN>) _param_fw_gd_est_min,
 		(ParamInt<px4::params::FW_GD_APPLY_R>) _param_fw_gd_apply_r,

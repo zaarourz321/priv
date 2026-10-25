@@ -82,32 +82,28 @@ influence a gain design.
 
 ## Flight-test excitation and identification
 
-The module identifies the rate plant used by this gain designer. With the
-coupled models enabled by default, it measures the relevant airflow state and
-cross-axis rate rather than assuming they are zero:
+The module identifies the single-axis rate plant used by this gain designer:
 
 ```
-q_dot = M_alpha * alpha + M_q * q + M_delta * u_pitch + bias
-p_dot = L_beta * beta + L_p * p + L_r * r + L_delta * u_roll + bias
-r_dot = N_beta * beta + N_r * r + N_p * p + N_delta * u_yaw + bias
+p_dot = L_p * p + L_delta * u_roll + bias
+q_dot = M_q * q + M_delta * u_pitch + bias
+r_dot = N_r * r + N_delta * u_yaw + bias
 ```
 
-During a test it adds one small, zero-mean **body-rate setpoint** to the
-normal fixed-wing attitude controller. `FW_GD_EXC_MODE=1` is the default
-bounded multi-sine waveform, which is deliberately more informative than one
-frequency for separating rate damping, static stability, and control
-effectiveness. `0` retains the legacy single sine. It never publishes a
-competing `vehicle_torque_setpoint`.
+During a test it adds one small, zero-mean, single-frequency sinusoidal
+**body-rate setpoint** to the normal fixed-wing attitude controller. It never
+publishes a competing `vehicle_torque_setpoint`.
 
-For roll and yaw, the estimator uses the normalized body-axis torque request.
-For pitch, it automatically locates the first PX4 control-allocation surface
-configured as **Elevator** (`CA_SV_CS*_TYPE = 3`) and uses its actual allocated
-`actuator_servos` command instead. This is essential: a body-torque request is
-not a physical elevator deflection and cannot produce a trustworthy
-`Cm_delta_e`. The pitch test will wait rather than inject if a fresh conventional
-elevator command is unavailable. Elevon and V-tail aircraft need a future
-multi-surface pitch-input model and are intentionally not treated as a single
-elevator.
+The estimator always uses actual allocated `actuator_servos` commands, never a
+virtual torque request. It reads the configured control-allocation surface
+types and their configured torque effectiveness. Pitch uses Elevator surfaces;
+yaw uses Rudder surfaces; and roll uses Left Aileron, Right Aileron, or
+Single-channel Aileron surfaces. Multiple matching surfaces are combined with
+their configured torque signs, so the input has the direction of the requested
+body moment. The test waits rather than injects if the selected axis has no
+usable physical surface command. This is essential: a virtual torque request
+is not a physical deflection and cannot produce a trustworthy control
+derivative.
 
 To prevent raw gyro angular-acceleration noise from invalidating slow aircraft
 tests, the estimator first low-pass filters rate and the corresponding physical
@@ -134,48 +130,6 @@ Here `L` is span for roll/yaw and chord for pitch; `delta_max` is the existing
 physical travel parameter for that axis. Therefore area, reference dimensions,
 inertia, density, and surface travel must be correct even when using flight
 identification.
-
-### Coupled pitch short-period model
-
-With `FW_GD_P_SP_EN=1` (the default), the pitch estimator does not treat the
-airframe as a one-state `q` model. It reconstructs angle of attack from
-air-relative NED velocity, the EKF wind estimate when available, and vehicle
-attitude, then estimates both state equations:
-
-```
-q_dot = M_alpha * alpha[k-1] + M_q * q[k-1] + M_delta * command[k-delay] + bias
-alpha[k] = Z_alpha * alpha[k-1] + Z_q * q[k-1] + Z_delta * command[k-delay] + bias
-```
-
-The pitch-moment equation is fitted directly in continuous time from filtered
-states. This avoids using a separate Euler conversion for the entries of a
-coupled alpha/q discrete transition matrix, which otherwise mixes `Cm_alpha`
-into `Cmq`. The alpha equation remains a separate discrete fit and validates
-the measured airflow state. Both residuals must pass validation.
-For the conventional fixed-wing pitch model, a non-negative `Cm_alpha` is
-rejected as physically invalid rather than treated as a usable identified
-model. It publishes the mean identified alpha,
-`identified_pitch_cm_alpha`, and alpha-state dynamics for review. Fresh local
-velocity and attitude are required for a pitch test. In HIL without a wind
-topic, the estimator explicitly falls back to zero wind. That is appropriate
-only when the simulated wind is zero. In real flight, a valid wind estimate is
-needed for an accurate physical angle of attack.
-
-### Coupled roll/yaw lateral-directional model
-
-With `FW_GD_LAT_EN=1` (the default), roll and yaw tests reconstruct sideslip
-from the same air-relative velocity used by pitch. A roll test fits
-`beta/p/r`, exposing `Cl_beta`, `Cl_p`, `Cl_r`, and roll-control effectiveness.
-A yaw test similarly exposes `Cn_beta`, `Cn_r`, `Cn_p`, and yaw-control
-effectiveness. It also fits the beta-state equation and publishes its
-normalized residual. The gain calculator continues to use only validated
-own-axis damping and control effectiveness; the additional terms are
-diagnostic and are never automatically applied.
-
-This is a compact linear small-disturbance model, not a full 6-DOF aircraft
-identifier. It does not identify translational force coefficients or the full
-inertia tensor. It does prevent steady sideslip and roll-yaw coupling from
-being falsely attributed entirely to `Cl_p`, `Cn_r`, or control effectiveness.
 
 ### Safe test sequence
 
@@ -205,13 +159,7 @@ being falsely attributed entirely to `Cl_p`, `Cn_r`, or control effectiveness.
     `excitation_state = COMPLETE`, a non-zero `identification_sample_count`,
     `identification_valid[axis] = true`, negative identified damping, positive
     identified control derivative, and a small `identification_fit` (normalized
-    RMS residual; lower is better). Also inspect
-    `identification_airflow_fit`, which grades the alpha or beta state model.
-    For pitch, check `identified_pitch_short_period = true` and the reported
-    mean alpha. For roll/yaw, check `identified_coupled_model[axis] = true`,
-    the reported `identified_airflow_angle` (mean beta),
-    `identified_static_derivative`, and `identified_cross_rate_derivative`.
-    If a result is rejected, inspect
+    RMS residual; lower is better). If a result is rejected, inspect
     `identification_reject_reason[axis]` and the published candidate values;
     candidates are diagnostic only until `identification_valid` is true.
 5. Set only the tested axis' source to `1`. Review the generated gains. To
@@ -256,9 +204,8 @@ PX4 command `+1` after the mixer/control allocator. The signs therefore must
 be expressed in PX4 body-moment convention: a positive normalized command must
 produce a positive body-axis angular acceleration.
 
-The model is only valid in the linear region. Identification uses the coupled
-terms above by default, but the PI gain design deliberately applies the
-validated diagonal dynamics only. It will explicitly mark an axis invalid if
+The model is only valid in the linear region. Identification and gain design
+both use this validated diagonal dynamics model. It will explicitly mark an axis invalid if
 its damping derivative is not stabilizing or its control effectiveness is not
 positive. It does not turn a rudderless aileron-yaw-damper aircraft into a
 controllable yaw-rate axis.

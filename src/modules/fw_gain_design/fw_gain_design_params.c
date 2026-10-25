@@ -576,23 +576,6 @@ PARAM_DEFINE_FLOAT(FW_GD_EXC_AMP, 4.0f);
 PARAM_DEFINE_FLOAT(FW_GD_EXC_FREQ, 0.7f);
 
 /**
- * Flight-test excitation waveform
- *
- * Selects the rate-setpoint waveform used during an explicitly started
- * identification. Multi-sine excites several independent frequencies while
- * remaining bounded by FW_GD_EXC_AMP. It is the recommended mode for pitch
- * short-period identification because a single sine cannot reliably separate
- * Cm_alpha, Cm_q, and elevator effectiveness in closed loop.
- *
- * @value 0 Single sine
- * @value 1 Multi-sine (recommended)
- * @min 0
- * @max 1
- * @group FW Gain Design Excitation
- */
-PARAM_DEFINE_INT32(FW_GD_EXC_MODE, 1);
-
-/**
  * Flight-test excitation duration
  *
  * Length of an explicitly started excitation. The command is removed on
@@ -641,10 +624,9 @@ PARAM_DEFINE_FLOAT(FW_GD_EST_TC, 20.0f);
 /**
  * Identification rate filter cutoff
  *
- * Low-pass cutoff used identically on measured body rate and normalized torque
- * command before the discrete rate model is estimated. This avoids using noisy
- * raw gyro angular acceleration. Keep it above the commanded excitation and
- * below structural/servo noise.
+ * Low-pass cutoff used identically on measured body rate and the allocated
+ * physical control-surface command before the simple discrete model is
+ * estimated. Keep it above the commanded excitation and below servo noise.
  *
  * @unit Hz
  * @min 0.1
@@ -658,11 +640,9 @@ PARAM_DEFINE_FLOAT(FW_GD_EST_FC, 2.0f);
 /**
  * Identification control-input delay
  *
- * Delay between the identified control input and its aerodynamic effect. Pitch
- * identification uses the allocated Elevator command, so this is physical
- * actuator transport delay. The default is zero because the allocator topic
- * already represents the commanded surface position. Set a measured non-zero
- * value only for real hardware with known servo transport delay.
+ * Delay between the allocated physical control-surface command and its
+ * aerodynamic effect. Set a measured non-zero value only for real hardware
+ * with known servo transport delay.
  *
  * @unit s
  * @min 0.0
@@ -672,36 +652,6 @@ PARAM_DEFINE_FLOAT(FW_GD_EST_FC, 2.0f);
  * @group FW Gain Design Excitation
  */
 PARAM_DEFINE_FLOAT(FW_GD_EST_DLY, 0.0f);
-
-/**
- * Use alpha-coupled pitch identification
- *
- * When enabled, pitch tests estimate a two-state short-period model using
- * body-rate and angle of attack reconstructed from air-relative velocity.
- * This separates Cm_q from Cm_alpha coupling. It requires fresh local
- * velocity and attitude data. Disable only to use the older one-state,
- * effective pitch-rate model.
- *
- * @boolean
- * @group FW Gain Design Excitation
- */
-PARAM_DEFINE_INT32(FW_GD_P_SP_EN, 1);
-
-/**
- * Use coupled lateral-directional identification
- *
- * When enabled, roll and yaw tests estimate their body-rate model with
- * measured sideslip and the other lateral body rate as states. Roll therefore
- * identifies Cl_beta and Cl_r alongside Cl_p and aileron effectiveness; yaw
- * identifies Cn_beta and Cn_p alongside Cn_r and yaw-control effectiveness.
- * Sideslip is reconstructed from air-relative velocity and requires fresh
- * local velocity plus attitude. Disable only to use the earlier one-state
- * rate model for roll and yaw.
- *
- * @boolean
- * @group FW Gain Design Excitation
- */
-PARAM_DEFINE_INT32(FW_GD_LAT_EN, 1);
 
 /**
  * Persist identified model on SD card
