@@ -92,24 +92,37 @@ p_dot = L_beta * beta + L_p * p + L_r * r + L_delta * u_roll + bias
 r_dot = N_beta * beta + N_r * r + N_p * p + N_delta * u_yaw + bias
 ```
 
-During a test it adds one small, zero-mean sine **body-rate setpoint** to the
-normal fixed-wing attitude controller. The normal rate controller then creates
-the normalized torque command; the estimator uses that command and measured
-body rate. It never races the rate controller or control allocator by
-publishing a second `vehicle_torque_setpoint`.
+During a test it adds one small, zero-mean **body-rate setpoint** to the
+normal fixed-wing attitude controller. `FW_GD_EXC_MODE=1` is the default
+bounded multi-sine waveform, which is deliberately more informative than one
+frequency for separating rate damping, static stability, and control
+effectiveness. `0` retains the legacy single sine. It never publishes a
+competing `vehicle_torque_setpoint`.
+
+For roll and yaw, the estimator uses the normalized body-axis torque request.
+For pitch, it automatically locates the first PX4 control-allocation surface
+configured as **Elevator** (`CA_SV_CS*_TYPE = 3`) and uses its actual allocated
+`actuator_servos` command instead. This is essential: a body-torque request is
+not a physical elevator deflection and cannot produce a trustworthy
+`Cm_delta_e`. The pitch test will wait rather than inject if a fresh conventional
+elevator command is unavailable. Elevon and V-tail aircraft need a future
+multi-surface pitch-input model and are intentionally not treated as a single
+elevator.
 
 To prevent raw gyro angular-acceleration noise from invalidating slow aircraft
-tests, the estimator first low-pass filters rate and torque equally, applies a
-configurable input delay, and fits the discrete model:
+tests, the estimator first low-pass filters rate and the corresponding physical
+control input equally, applies a configurable input delay, and fits the
+discrete model:
 
 ```
 rate[k] = A * rate[k-1] + B * command[k-delay] + bias
 ```
 
 It then converts `A` and `B` to the continuous `a` and `b` above. `FW_GD_EST_FC`
-is the filter cutoff and `FW_GD_EST_DLY` is the command-to-response delay; their
-defaults (2 Hz and 0.06 s) are appropriate starting points for ordinary PWM
-servos. At the end of a qualifying test, the module converts the result at the
+is the filter cutoff and `FW_GD_EST_DLY` is the command-to-response delay. The
+defaults are 2 Hz and zero delay, appropriate for HIL or direct surface-command
+models. On real hardware, enter a measured non-zero servo transport delay. At
+the end of a qualifying test, the module converts the result at the
 mean tested true airspeed into the normal physical derivatives:
 
 ```
@@ -135,7 +148,10 @@ alpha[k] = Z_alpha * alpha[k-1] + Z_q * q[k-1] + Z_delta * command[k-delay] + bi
 ```
 
 This separates the `Cm_alpha` contribution from `Cmq` and gives an independent
-alpha-state fit. It publishes the mean identified alpha,
+alpha-state fit. Both the rate and alpha/beta residuals must pass validation.
+For the conventional fixed-wing pitch model, a non-negative `Cm_alpha` is
+rejected as physically invalid rather than treated as a usable identified
+model. It publishes the mean identified alpha,
 `identified_pitch_cm_alpha`, and alpha-state dynamics for review. Fresh local
 velocity and attitude are required for a pitch test. In HIL without a wind
 topic, the estimator explicitly falls back to zero wind. That is appropriate

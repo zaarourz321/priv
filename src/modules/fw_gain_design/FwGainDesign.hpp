@@ -55,6 +55,7 @@
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/actuator_armed.h>
+#include <uORB/topics/actuator_servos.h>
 #include <uORB/topics/airspeed_validated.h>
 #include <uORB/topics/fw_gain_design.h>
 #include <uORB/topics/fw_gain_design_gains.h>
@@ -98,11 +99,13 @@ private:
 	void calculate_design(float true_airspeed, fw_gain_design_s &design) const;
 	void update_flight_test();
 	void reset_estimator(Axis axis);
-	void update_estimator(Axis axis, float rate, float cross_rate, float torque, float angle_of_attack, float sideslip,
+	void update_estimator(Axis axis, float rate, float cross_rate, float control_input, float angle_of_attack, float sideslip,
 			      float true_airspeed, float dt);
 	void finalize_estimate(Axis axis);
 	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
 	bool estimate_airflow_angles(float &angle_of_attack, float &sideslip) const;
+	bool pitch_surface_input(float &control_input) const;
+	void update_pitch_surface_index();
 	bool model_source_is_estimated(Axis axis) const;
 	bool estimate_valid(Axis axis) const;
 	bool request_excitation(Axis axis);
@@ -198,6 +201,7 @@ private:
 	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 	uORB::SubscriptionData<airspeed_validated_s> _airspeed_validated_sub{ORB_ID(airspeed_validated)};
 	uORB::SubscriptionData<actuator_armed_s> _actuator_armed_sub{ORB_ID(actuator_armed)};
+	uORB::SubscriptionData<actuator_servos_s> _actuator_servos_sub{ORB_ID(actuator_servos)};
 	uORB::SubscriptionData<vehicle_angular_velocity_s> _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
 	uORB::SubscriptionData<vehicle_attitude_s> _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::SubscriptionData<vehicle_torque_setpoint_s> _vehicle_torque_setpoint_sub{ORB_ID(vehicle_torque_setpoint)};
@@ -251,6 +255,7 @@ private:
 	float _excitation_amplitude{0.f};
 	float _excitation_frequency{0.f};
 	float _excitation_duration{0.f};
+	int32_t _excitation_mode{0};
 	float _excitation_rate_sp{0.f};
 	hrt_abstime _excitation_start{0};
 
@@ -269,6 +274,9 @@ private:
 	param_t _rate_i_param[AXIS_COUNT] {PARAM_INVALID, PARAM_INVALID, PARAM_INVALID};
 	param_t _rate_ff_param[AXIS_COUNT] {PARAM_INVALID, PARAM_INVALID, PARAM_INVALID};
 	param_t _attitude_tc_param[AXIS_COUNT] {PARAM_INVALID, PARAM_INVALID, PARAM_INVALID};
+	param_t _control_surface_count_param{PARAM_INVALID};
+	param_t _control_surface_type_param[actuator_servos_s::NUM_CONTROLS] {};
+	int8_t _pitch_surface_index{-1};
 	float _baseline_rate_p[AXIS_COUNT] {NAN, NAN, NAN};
 	float _baseline_rate_i[AXIS_COUNT] {NAN, NAN, NAN};
 	float _baseline_rate_ff[AXIS_COUNT] {NAN, NAN, NAN};
@@ -314,6 +322,7 @@ private:
 		(ParamInt<px4::params::FW_GD_EXC_AXIS>) _param_fw_gd_exc_axis,
 		(ParamFloat<px4::params::FW_GD_EXC_AMP>) _param_fw_gd_exc_amp,
 		(ParamFloat<px4::params::FW_GD_EXC_FREQ>) _param_fw_gd_exc_freq,
+		(ParamInt<px4::params::FW_GD_EXC_MODE>) _param_fw_gd_exc_mode,
 		(ParamFloat<px4::params::FW_GD_EXC_TIME>) _param_fw_gd_exc_time,
 		(ParamFloat<px4::params::FW_GD_EXC_RMAX>) _param_fw_gd_exc_rmax,
 		(ParamFloat<px4::params::FW_GD_EST_TC>) _param_fw_gd_est_tc,

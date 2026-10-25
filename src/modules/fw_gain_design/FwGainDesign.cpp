@@ -70,6 +70,15 @@ FwGainDesign::FwGainDesign() :
 	_rate_ff_param[YAW] = param_find("FW_YR_FF");
 	_attitude_tc_param[ROLL] = param_find("FW_R_TC");
 	_attitude_tc_param[PITCH] = param_find("FW_P_TC");
+	_control_surface_count_param = param_find("CA_SV_CS_COUNT");
+
+	for (uint8_t index = 0; index < actuator_servos_s::NUM_CONTROLS; ++index) {
+		char parameter_name[20];
+		snprintf(parameter_name, sizeof(parameter_name), "CA_SV_CS%u_TYPE", index);
+		_control_surface_type_param[index] = param_find(parameter_name);
+	}
+
+	update_pitch_surface_index();
 	updateParams();
 	reset_schedule();
 }
@@ -93,6 +102,49 @@ bool FwGainDesign::init()
 	// apply switches is enabled. A 50 Hz publication also gives the optional
 	// flight-test rate-setpoint injection a bounded, regular update interval.
 	ScheduleOnInterval(20_ms);
+	return true;
+}
+
+void FwGainDesign::update_pitch_surface_index()
+{
+	_pitch_surface_index = -1;
+	int32_t surface_count = 0;
+
+	if (_control_surface_count_param == PARAM_INVALID
+	    || param_get(_control_surface_count_param, &surface_count) != PX4_OK) {
+		return;
+	}
+
+	const int32_t count = surface_count < 0 ? 0
+					  : (surface_count > static_cast<int32_t>(actuator_servos_s::NUM_CONTROLS)
+					     ? static_cast<int32_t>(actuator_servos_s::NUM_CONTROLS) : surface_count);
+
+	for (int32_t index = 0; index < count; ++index) {
+		int32_t type = 0;
+
+		if (_control_surface_type_param[index] != PARAM_INVALID
+		    && param_get(_control_surface_type_param[index], &type) == PX4_OK
+		    && type == 3) { // ActuatorEffectivenessControlSurfaces::Type::Elevator
+			_pitch_surface_index = static_cast<int8_t>(index);
+			break;
+		}
+	}
+}
+
+bool FwGainDesign::pitch_surface_input(float &control_input) const
+{
+	if (_pitch_surface_index < 0
+	    || hrt_elapsed_time(&_actuator_servos_sub.get().timestamp) > 100_ms) {
+		return false;
+	}
+
+	const float command = _actuator_servos_sub.get().control[_pitch_surface_index];
+
+	if (!PX4_ISFINITE(command) || fabsf(command) > 1.01f) {
+		return false;
+	}
+
+	control_input = command;
 	return true;
 }
 
@@ -656,7 +708,7 @@ bool FwGainDesign::update_rls(float theta[kMaxModelOrder], float covariance[kMax
 	return PX4_ISFINITE(fitted_output);
 }
 
-void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, float torque, float angle_of_attack,
+void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, float control_input, float angle_of_attack,
 				    float sideslip, float true_airspeed, float dt)
 {
 	const uint8_t axis_index = static_cast<uint8_t>(axis);
@@ -664,7 +716,7 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 	const bool use_pitch_short_period = estimator.pitch_short_period;
 	const bool use_lateral_coupling = estimator.lateral_coupled;
 
-	if (!estimator.initialized || !PX4_ISFINITE(rate) || !PX4_ISFINITE(torque)
+	if (!estimator.initialized || !PX4_ISFINITE(rate) || !PX4_ISFINITE(control_input)
 	    || !PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f
 	    || !PX4_ISFINITE(dt) || dt <= 0.f || (use_pitch_short_period && !PX4_ISFINITE(angle_of_attack))
 	    || (use_lateral_coupling && (!PX4_ISFINITE(cross_rate) || !PX4_ISFINITE(sideslip)))) {
@@ -683,7 +735,7 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 	// The sensor's angular acceleration is intentionally not used here. At the
 	// low frequencies of an aircraft flight test it is derivative-noise
 	// dominated. Instead identify the equivalent discrete plant directly from
-	// equally filtered rate and control command. For pitch, alpha is a separate
+	// equally filtered rate and physical control command. For pitch, alpha is a separate
 	// state so the short-period alpha coupling is not folded into Cmq.
 	const float filter_time_constant = 1.f / (2.f * M_PI_F * filter_cutoff_hz);
 	const float filter_alpha = math::constrain(dt / (dt + filter_time_constant), 0.001f, 0.95f);
@@ -697,10 +749,10 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 		estimator.previous_filtered_angle_of_attack = angle_of_attack;
 		estimator.filtered_sideslip = sideslip;
 		estimator.previous_filtered_sideslip = sideslip;
-		estimator.filtered_torque = torque;
+		estimator.filtered_torque = control_input;
 
 		for (float &history_sample : estimator.torque_history) {
-			history_sample = torque;
+			history_sample = control_input;
 		}
 
 		estimator.filters_initialized = true;
@@ -718,7 +770,7 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float cross_rate, flo
 		estimator.filtered_sideslip += filter_alpha * (sideslip - estimator.filtered_sideslip);
 	}
 
-	estimator.filtered_torque += filter_alpha * (torque - estimator.filtered_torque);
+	estimator.filtered_torque += filter_alpha * (control_input - estimator.filtered_torque);
 
 	const int delay_samples = math::constrain(static_cast<int>(roundf(input_delay_s / dt)), 0,
 			static_cast<int>(kTorqueHistoryLength) - 1);
@@ -932,7 +984,8 @@ void FwGainDesign::finalize_estimate(Axis axis)
 		return;
 	}
 
-	if (fit > 0.5f) {
+	if (fit > 0.5f || ((use_pitch_short_period || use_lateral_coupling)
+			   && (!PX4_ISFINITE(airflow_fit) || airflow_fit > 0.5f))) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_POOR_FIT;
 		return;
 	}
@@ -958,7 +1011,11 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	}
 
 	if (!PX4_ISFINITE(damping_derivative) || !PX4_ISFINITE(control_derivative)
-	    || damping_derivative >= 0.f || control_derivative <= 0.f) {
+	    || damping_derivative >= 0.f || control_derivative <= 0.f
+	    // A conventional fixed wing must produce a restoring nose-down moment
+	    // for positive alpha. Do not mark a poorly observable positive result
+	    // as a usable pitch model.
+	    || (use_pitch_short_period && (!PX4_ISFINITE(static_derivative) || static_derivative >= 0.f))) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_DERIVATIVE;
 		return;
 	}
@@ -1036,6 +1093,17 @@ bool FwGainDesign::flight_test_conditions_met(Axis axis, float &true_airspeed) c
 		return false;
 	}
 
+	// Pitch identification needs the actual allocated elevator position, not
+	// the abstract body-torque request. A conventional Elevator surface is
+	// located from the active PX4 control-allocation configuration.
+	if (axis == PITCH) {
+		float elevator_command = NAN;
+
+		if (!pitch_surface_input(elevator_command)) {
+			return false;
+		}
+	}
+
 	const bool estimator_running = _excitation_state == fw_gain_design_s::EXCITATION_STATE_RUNNING;
 	const bool use_pitch_short_period = axis == PITCH
 			&& (estimator_running ? _estimator[PITCH].pitch_short_period : _param_fw_gd_p_sp_en.get() != 0);
@@ -1088,6 +1156,7 @@ void FwGainDesign::update_flight_test()
 	_actuator_armed_sub.update();
 	_airspeed_validated_sub.update();
 	_vehicle_angular_velocity_sub.update();
+	_actuator_servos_sub.update();
 	_vehicle_attitude_sub.update();
 	_vehicle_torque_setpoint_sub.update();
 	_vehicle_local_position_sub.update();
@@ -1122,9 +1191,11 @@ void FwGainDesign::update_flight_test()
 		const float amplitude = _param_fw_gd_exc_amp.get();
 		const float frequency = _param_fw_gd_exc_freq.get();
 		const float duration = _param_fw_gd_exc_time.get();
+		const int32_t excitation_mode = _param_fw_gd_exc_mode.get();
 
 		if (!PX4_ISFINITE(amplitude) || !PX4_ISFINITE(frequency) || !PX4_ISFINITE(duration)
-		    || amplitude <= 0.f || frequency <= 0.f || duration <= kExcitationRampTimeS) {
+		    || amplitude <= 0.f || frequency <= 0.f || duration <= kExcitationRampTimeS
+		    || (excitation_mode != 0 && excitation_mode != 1)) {
 			abort_excitation(fw_gain_design_s::EXCITATION_ABORT_INVALID_CONFIGURATION);
 			return;
 		}
@@ -1137,6 +1208,7 @@ void FwGainDesign::update_flight_test()
 		_excitation_amplitude = math::radians(amplitude);
 		_excitation_frequency = frequency;
 		_excitation_duration = duration;
+		_excitation_mode = excitation_mode;
 		_excitation_start_requested = false;
 		_excitation_state = fw_gain_design_s::EXCITATION_STATE_WAITING_FOR_CONDITIONS;
 	}
@@ -1199,11 +1271,23 @@ void FwGainDesign::update_flight_test()
 	}
 
 	const float ramp = math::constrain(elapsed / kExcitationRampTimeS, 0.f, 1.f);
-	_excitation_rate_sp = _excitation_amplitude * ramp * sinf(2.f * M_PI_F * _excitation_frequency * elapsed);
+	const float phase = 2.f * M_PI_F * _excitation_frequency * elapsed;
+	float waveform = sinf(phase);
+
+	if (_excitation_mode == 1) {
+		// A bounded, incommensurate multi-sine makes alpha, pitch rate, and
+		// control input independently observable. Its coefficient sum is one,
+		// so FW_GD_EXC_AMP remains a hard peak-amplitude limit.
+		waveform = (sinf(phase) + 0.55f * sinf(1.618f * phase + 0.7f)
+			    + 0.30f * sinf(2.414f * phase + 1.9f)) / 1.85f;
+	}
+
+	_excitation_rate_sp = _excitation_amplitude * ramp * waveform;
 
 	if (_last_estimator_sample != angular_velocity.timestamp_sample && _last_estimator_sample != 0) {
 		const float dt = (angular_velocity.timestamp_sample - _last_estimator_sample) * 1e-6f;
 		const vehicle_torque_setpoint_s &torque_setpoint = _vehicle_torque_setpoint_sub.get();
+		float control_input = torque_setpoint.xyz[axis_index];
 		float angle_of_attack = NAN;
 		float sideslip = NAN;
 		float cross_rate = NAN;
@@ -1222,10 +1306,13 @@ void FwGainDesign::update_flight_test()
 			cross_rate = angular_velocity.xyz[ROLL];
 		}
 
-		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f
-		    && hrt_elapsed_time(&torque_setpoint.timestamp) < 100_ms) {
+		const bool input_valid = _excitation_axis != PITCH
+					 ? hrt_elapsed_time(&torque_setpoint.timestamp) < 100_ms
+					 : pitch_surface_input(control_input);
+
+		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid) {
 			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], cross_rate,
-					 torque_setpoint.xyz[axis_index], angle_of_attack, sideslip, true_airspeed, dt);
+					 control_input, angle_of_attack, sideslip, true_airspeed, dt);
 		}
 	}
 
@@ -1569,6 +1656,7 @@ void FwGainDesign::Run()
 		parameter_update_s parameter_update{};
 		_parameter_update_sub.copy(&parameter_update);
 		updateParams();
+		update_pitch_surface_index();
 		reset_schedule();
 	}
 
@@ -1674,6 +1762,7 @@ int FwGainDesign::print_status()
 			 (unsigned)(_speed_index + 1U), (unsigned)_speed_count);
 	PX4_INFO("live apply: roll %s, pitch %s, yaw %s", apply_enabled(ROLL) ? "enabled" : "disabled",
 		 apply_enabled(PITCH) ? "enabled" : "disabled", apply_enabled(YAW) ? "enabled" : "disabled");
+	PX4_INFO("pitch ID input: %s", _pitch_surface_index >= 0 ? "allocated Elevator" : "no Elevator surface");
 	PX4_INFO("SD model: %s, loaded %s, saved %s", _param_fw_gd_sd_model.get() != 0 ? "enabled" : "disabled",
 		 _sd_model_loaded ? "yes" : "no", _sd_model_saved ? "yes" : "no");
 	PX4_INFO("excitation: state %u axis %u samples %u", (unsigned)_excitation_state,

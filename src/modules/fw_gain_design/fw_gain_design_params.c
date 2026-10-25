@@ -576,6 +576,23 @@ PARAM_DEFINE_FLOAT(FW_GD_EXC_AMP, 4.0f);
 PARAM_DEFINE_FLOAT(FW_GD_EXC_FREQ, 0.7f);
 
 /**
+ * Flight-test excitation waveform
+ *
+ * Selects the rate-setpoint waveform used during an explicitly started
+ * identification. Multi-sine excites several independent frequencies while
+ * remaining bounded by FW_GD_EXC_AMP. It is the recommended mode for pitch
+ * short-period identification because a single sine cannot reliably separate
+ * Cm_alpha, Cm_q, and elevator effectiveness in closed loop.
+ *
+ * @value 0 Single sine
+ * @value 1 Multi-sine (recommended)
+ * @min 0
+ * @max 1
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_INT32(FW_GD_EXC_MODE, 1);
+
+/**
  * Flight-test excitation duration
  *
  * Length of an explicitly started excitation. The command is removed on
@@ -641,10 +658,11 @@ PARAM_DEFINE_FLOAT(FW_GD_EST_FC, 2.0f);
 /**
  * Identification control-input delay
  *
- * Delay between the normalized PX4 torque command and its aerodynamic effect.
- * It represents actuator transport/servo delay and the rate-controller output
- * timestamp alignment. Use the default for normal PWM servos; tune only if a
- * repeatable test reports poor fit.
+ * Delay between the identified control input and its aerodynamic effect. Pitch
+ * identification uses the allocated Elevator command, so this is physical
+ * actuator transport delay. The default is zero because the allocator topic
+ * already represents the commanded surface position. Set a measured non-zero
+ * value only for real hardware with known servo transport delay.
  *
  * @unit s
  * @min 0.0
@@ -653,7 +671,7 @@ PARAM_DEFINE_FLOAT(FW_GD_EST_FC, 2.0f);
  * @increment 0.01
  * @group FW Gain Design Excitation
  */
-PARAM_DEFINE_FLOAT(FW_GD_EST_DLY, 0.06f);
+PARAM_DEFINE_FLOAT(FW_GD_EST_DLY, 0.0f);
 
 /**
  * Use alpha-coupled pitch identification
