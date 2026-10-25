@@ -516,6 +516,21 @@ PARAM_DEFINE_FLOAT(FW_GD_EXC_FREQ, 0.7f);
 PARAM_DEFINE_FLOAT(FW_GD_P_FRAT, 1.8f);
 
 /**
+ * Yaw identification second-frequency ratio
+ *
+ * A yaw test uses two sequential sine tests to separate sideslip and yaw-rate
+ * dynamics. The second sine frequency is FW_GD_EXC_FREQ multiplied by this
+ * value; the two tones are never applied at the same time.
+ *
+ * @min 1.2
+ * @max 3.0
+ * @decimal 2
+ * @increment 0.1
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_FLOAT(FW_GD_Y_FRAT, 1.8f);
+
+/**
  * Flight-test excitation duration
  *
  * Length of an explicitly started excitation. The command is removed on

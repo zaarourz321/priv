@@ -52,7 +52,7 @@ namespace
 constexpr char kSdModelPath[] = "/fs/microsd/fw_gain_design_model.bin";
 constexpr char kSdModelTemporaryPath[] = "/fs/microsd/fw_gain_design_model.tmp";
 constexpr uint32_t kSdModelMagic = 0x46574744U; // "FWGD"
-constexpr uint16_t kSdModelVersion = 4;
+constexpr uint16_t kSdModelVersion = 5;
 }
 
 FwGainDesign::FwGainDesign() :
@@ -478,6 +478,9 @@ void FwGainDesign::reset_estimator(Axis axis)
 
 	if (axis == PITCH) {
 		_identified_pitch_cm_alpha = NAN;
+
+	} else if (axis == YAW) {
+		_identified_yaw_cn_beta = NAN;
 	}
 	_identification_fit[static_cast<uint8_t>(axis)] = NAN;
 	_identification_reject_reason[static_cast<uint8_t>(axis)] = fw_gain_design_s::IDENTIFICATION_REJECT_NOT_RUN;
@@ -509,6 +512,7 @@ uint32_t FwGainDesign::model_checksum(const PersistentModel &model)
 	hash_bytes(model.rate_b, sizeof(model.rate_b));
 	hash_bytes(model.airspeed, sizeof(model.airspeed));
 	hash_bytes(&model.pitch_cm_alpha, sizeof(model.pitch_cm_alpha));
+	hash_bytes(&model.yaw_cn_beta, sizeof(model.yaw_cn_beta));
 
 	return checksum;
 }
@@ -534,6 +538,11 @@ bool FwGainDesign::load_model_from_sd()
 
 	if ((model.valid_mask & (1U << PITCH)) != 0
 	    && (!PX4_ISFINITE(model.pitch_cm_alpha) || model.pitch_cm_alpha >= 0.f)) {
+		return false;
+	}
+
+	if ((model.valid_mask & (1U << YAW)) != 0
+	    && (!PX4_ISFINITE(model.yaw_cn_beta) || model.yaw_cn_beta <= 0.f)) {
 		return false;
 	}
 
@@ -566,6 +575,7 @@ bool FwGainDesign::load_model_from_sd()
 	}
 
 	_identified_pitch_cm_alpha = model.pitch_cm_alpha;
+	_identified_yaw_cn_beta = model.yaw_cn_beta;
 
 	_sd_model_loaded = true;
 	_sd_model_dirty = false;
@@ -585,6 +595,7 @@ bool FwGainDesign::save_model_to_sd()
 	model.version = kSdModelVersion;
 	model.size = static_cast<uint16_t>(sizeof(PersistentModel));
 	model.pitch_cm_alpha = _identified_pitch_cm_alpha;
+	model.yaw_cn_beta = _identified_yaw_cn_beta;
 
 	for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
 		if (!_identified_valid[axis]) {
@@ -727,7 +738,7 @@ bool FwGainDesign::solve_3x3(float matrix[3][3], float vector[3], float solution
 	       && PX4_ISFINITE(pivot_ratio);
 }
 
-void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, float angle_of_attack,
+void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, float airflow_angle,
 				     float true_airspeed, float dt, float phase, uint8_t frequency_index, bool collect_sample)
 {
 	const uint8_t axis_index = static_cast<uint8_t>(axis);
@@ -736,7 +747,7 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, 
 	if (!estimator.initialized || !PX4_ISFINITE(rate) || !PX4_ISFINITE(control_input)
 	    || !PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f
 	    || !PX4_ISFINITE(dt) || dt <= 0.f || frequency_index >= 2
-	    || (axis == PITCH && !PX4_ISFINITE(angle_of_attack))) {
+	    || ((axis == PITCH || axis == YAW) && !PX4_ISFINITE(airflow_angle))) {
 		return;
 	}
 
@@ -756,7 +767,7 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, 
 	if (!estimator.filters_initialized) {
 		estimator.filtered_rate = rate;
 		estimator.filtered_control = control_input;
-		estimator.filtered_angle_of_attack = angle_of_attack;
+		estimator.filtered_airflow_angle = airflow_angle;
 		estimator.filters_initialized = true;
 		return;
 	}
@@ -764,8 +775,8 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, 
 	estimator.filtered_rate += filter_alpha * (rate - estimator.filtered_rate);
 	estimator.filtered_control += filter_alpha * (control_input - estimator.filtered_control);
 
-	if (axis == PITCH) {
-		estimator.filtered_angle_of_attack += filter_alpha * (angle_of_attack - estimator.filtered_angle_of_attack);
+	if (axis == PITCH || axis == YAW) {
+		estimator.filtered_airflow_angle += filter_alpha * (airflow_angle - estimator.filtered_airflow_angle);
 	}
 
 	if (!collect_sample) {
@@ -790,11 +801,11 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, 
 	measurement.control.sum_cos += estimator.filtered_control * cosine;
 	measurement.control.sum_sin += estimator.filtered_control * sine;
 
-	if (axis == PITCH) {
-		measurement.angle_of_attack.sum += estimator.filtered_angle_of_attack;
-		measurement.angle_of_attack.sum_sq += estimator.filtered_angle_of_attack * estimator.filtered_angle_of_attack;
-		measurement.angle_of_attack.sum_cos += estimator.filtered_angle_of_attack * cosine;
-		measurement.angle_of_attack.sum_sin += estimator.filtered_angle_of_attack * sine;
+	if (axis == PITCH || axis == YAW) {
+		measurement.airflow_angle.sum += estimator.filtered_airflow_angle;
+		measurement.airflow_angle.sum_sq += estimator.filtered_airflow_angle * estimator.filtered_airflow_angle;
+		measurement.airflow_angle.sum_cos += estimator.filtered_airflow_angle * cosine;
+		measurement.airflow_angle.sum_sin += estimator.filtered_airflow_angle * sine;
 	}
 
 	measurement.airspeed_sum += true_airspeed;
@@ -804,8 +815,8 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, 
 
 void FwGainDesign::finalize_estimate(Axis axis)
 {
-	if (axis == PITCH) {
-		finalize_pitch_estimate();
+	if (axis == PITCH || axis == YAW) {
+		finalize_coupled_estimate(axis);
 		return;
 	}
 
@@ -942,14 +953,15 @@ void FwGainDesign::finalize_estimate(Axis axis)
 	}
 }
 
-void FwGainDesign::finalize_pitch_estimate()
+void FwGainDesign::finalize_coupled_estimate(Axis axis)
 {
-	const uint8_t axis_index = static_cast<uint8_t>(PITCH);
+	const uint8_t axis_index = static_cast<uint8_t>(axis);
+	const bool pitch_axis = axis == PITCH;
 	const RateEstimator &estimator = _estimator[axis_index];
 	const HarmonicMeasurement &low_frequency = estimator.measurement[0];
 	const HarmonicMeasurement &high_frequency = estimator.measurement[1];
 	const float min_samples = static_cast<float>(_param_fw_gd_est_min.get());
-	const float frequency_ratio = _param_fw_gd_p_frat.get();
+	const float frequency_ratio = pitch_axis ? _param_fw_gd_p_frat.get() : _param_fw_gd_y_frat.get();
 	const float base_frequency = _excitation_frequency;
 	const float input_delay = _param_fw_gd_est_dly.get();
 
@@ -970,14 +982,14 @@ void FwGainDesign::finalize_pitch_estimate()
 
 	HarmonicFit rate_fit[2] {};
 	HarmonicFit control_fit[2] {};
-	HarmonicFit alpha_fit[2] {};
+	HarmonicFit airflow_fit[2] {};
 	const HarmonicMeasurement *measurements[2] = {&low_frequency, &high_frequency};
 	const float frequencies[2] = {base_frequency, base_frequency * frequency_ratio};
 
 	for (uint8_t index = 0; index < 2; ++index) {
 		if (!fit_harmonic(*measurements[index], measurements[index]->rate, rate_fit[index])
 		    || !fit_harmonic(*measurements[index], measurements[index]->control, control_fit[index])
-		    || !fit_harmonic(*measurements[index], measurements[index]->angle_of_attack, alpha_fit[index])) {
+		    || !fit_harmonic(*measurements[index], measurements[index]->airflow_angle, airflow_fit[index])) {
 			_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_INPUT;
 			return;
 		}
@@ -991,8 +1003,8 @@ void FwGainDesign::finalize_pitch_estimate()
 	for (uint8_t index = 0; index < 2; ++index) {
 		const float omega = 2.f * M_PI_F * frequencies[index];
 		const float delay_phase = omega * input_delay;
-		const float alpha_real = alpha_fit[index].cosine;
-		const float alpha_imag = -alpha_fit[index].sine;
+		const float airflow_real = airflow_fit[index].cosine;
+		const float airflow_imag = -airflow_fit[index].sine;
 		const float rate_real = rate_fit[index].cosine;
 		const float rate_imag = -rate_fit[index].sine;
 		const float control_real = control_fit[index].cosine;
@@ -1000,19 +1012,19 @@ void FwGainDesign::finalize_pitch_estimate()
 		const float delayed_control_real = control_real * cosf(delay_phase) + control_imag * sinf(delay_phase);
 		const float delayed_control_imag = control_imag * cosf(delay_phase) - control_real * sinf(delay_phase);
 		const float control_amplitude = sqrtf(control_real * control_real + control_imag * control_imag);
-		const float alpha_amplitude = sqrtf(alpha_real * alpha_real + alpha_imag * alpha_imag);
+		const float airflow_amplitude = sqrtf(airflow_real * airflow_real + airflow_imag * airflow_imag);
 
-		if (!PX4_ISFINITE(omega) || !PX4_ISFINITE(control_amplitude) || !PX4_ISFINITE(alpha_amplitude)
-		    || control_amplitude < 0.01f || alpha_amplitude < math::radians(0.05f)) {
+		if (!PX4_ISFINITE(omega) || !PX4_ISFINITE(control_amplitude) || !PX4_ISFINITE(airflow_amplitude)
+		    || control_amplitude < 0.01f || airflow_amplitude < math::radians(0.05f)) {
 			_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_LOW_EXCITATION;
 			return;
 		}
 
-		rows[row_count][0] = alpha_real;
+		rows[row_count][0] = airflow_real;
 		rows[row_count][1] = rate_real;
 		rows[row_count][2] = delayed_control_real;
 		output[row_count++] = -omega * rate_imag;
-		rows[row_count][0] = alpha_imag;
+		rows[row_count][0] = airflow_imag;
 		rows[row_count][1] = rate_imag;
 		rows[row_count][2] = delayed_control_imag;
 		output[row_count++] = omega * rate_real;
@@ -1078,33 +1090,40 @@ void FwGainDesign::finalize_pitch_estimate()
 
 	const float dynamic_fit = sqrtf(residual_sum_sq / fmaxf(output_sum_sq, 1e-6f));
 	const float fit = fmaxf(dynamic_fit, fmaxf(fmaxf(rate_fit[0].residual_ratio, rate_fit[1].residual_ratio),
-						  fmaxf(alpha_fit[0].residual_ratio, alpha_fit[1].residual_ratio)));
+						  fmaxf(fmaxf(control_fit[0].residual_ratio, control_fit[1].residual_ratio),
+								fmaxf(airflow_fit[0].residual_ratio, airflow_fit[1].residual_ratio))));
 	const float airspeed = (low_frequency.airspeed_sum + high_frequency.airspeed_sum)
 			       / static_cast<float>(low_frequency.sample_count + high_frequency.sample_count);
 	const float rho = _param_fw_gd_rho.get();
 	const float sref = _param_fw_gd_sref.get();
-	const float cref = _param_fw_gd_cref.get();
-	const float inertia = _param_fw_gd_iy.get();
-	const float control_range = _param_fw_gd_p_max.get();
+	const float reference_length = pitch_axis ? _param_fw_gd_cref.get() : _param_fw_gd_bref.get();
+	const float inertia = pitch_axis ? _param_fw_gd_iy.get() : _param_fw_gd_iz.get();
+	const float control_range = pitch_axis ? _param_fw_gd_p_max.get() : _param_fw_gd_y_max.get();
 	const float rate_a = coefficient[1];
 	const float rate_b = coefficient[2];
-	const float cm_alpha = 2.f * inertia * coefficient[0] / (rho * airspeed * airspeed * sref * cref);
-	const float damping_derivative = 4.f * inertia * rate_a / (rho * airspeed * sref * cref * cref);
+	const float static_derivative = 2.f * inertia * coefficient[0] / (rho * airspeed * airspeed * sref * reference_length);
+	const float damping_derivative = 4.f * inertia * rate_a / (rho * airspeed * sref * reference_length * reference_length);
 	const float control_derivative = 2.f * inertia * rate_b
-					 / (rho * airspeed * airspeed * sref * cref * control_range);
+					 / (rho * airspeed * airspeed * sref * reference_length * control_range);
 
 	_identified_airspeed[axis_index] = airspeed;
 	_identified_rate_a[axis_index] = rate_a;
 	_identified_rate_b[axis_index] = rate_b;
-	_identified_pitch_cm_alpha = cm_alpha;
+
+	if (pitch_axis) {
+		_identified_pitch_cm_alpha = static_derivative;
+
+	} else {
+		_identified_yaw_cn_beta = static_derivative;
+	}
 	_identified_damping_derivative[axis_index] = damping_derivative;
 	_identified_control_derivative[axis_index] = control_derivative;
 	_identification_fit[axis_index] = fit;
 
-	if (!PX4_ISFINITE(rho) || !PX4_ISFINITE(sref) || !PX4_ISFINITE(cref) || !PX4_ISFINITE(inertia)
+	if (!PX4_ISFINITE(rho) || !PX4_ISFINITE(sref) || !PX4_ISFINITE(reference_length) || !PX4_ISFINITE(inertia)
 	    || !PX4_ISFINITE(control_range) || !PX4_ISFINITE(airspeed) || !PX4_ISFINITE(rate_a)
-	    || !PX4_ISFINITE(rate_b) || !PX4_ISFINITE(cm_alpha) || !PX4_ISFINITE(damping_derivative)
-	    || !PX4_ISFINITE(control_derivative) || !PX4_ISFINITE(fit) || rho <= 0.f || sref <= 0.f || cref <= 0.f
+	    || !PX4_ISFINITE(rate_b) || !PX4_ISFINITE(static_derivative) || !PX4_ISFINITE(damping_derivative)
+	    || !PX4_ISFINITE(control_derivative) || !PX4_ISFINITE(fit) || rho <= 0.f || sref <= 0.f || reference_length <= 0.f
 	    || inertia <= 0.f || control_range <= 0.f || airspeed <= 0.f) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_INPUT;
 		return;
@@ -1120,7 +1139,8 @@ void FwGainDesign::finalize_pitch_estimate()
 		return;
 	}
 
-	if (cm_alpha >= 0.f || damping_derivative >= 0.f || control_derivative <= 0.f) {
+	if ((pitch_axis && static_derivative >= 0.f) || (!pitch_axis && static_derivative <= 0.f)
+	    || damping_derivative >= 0.f || control_derivative <= 0.f) {
 		_identification_reject_reason[axis_index] = fw_gain_design_s::IDENTIFICATION_REJECT_INVALID_DERIVATIVE;
 		return;
 	}
@@ -1143,7 +1163,7 @@ void FwGainDesign::finalize_pitch_estimate()
 	}
 }
 
-bool FwGainDesign::estimate_angle_of_attack(float &angle_of_attack) const
+bool FwGainDesign::estimate_airflow_angle(Axis axis, float &airflow_angle) const
 {
 	const vehicle_local_position_s &local_position = _vehicle_local_position_sub.get();
 	const vehicle_attitude_s &attitude = _vehicle_attitude_sub.get();
@@ -1177,8 +1197,10 @@ bool FwGainDesign::estimate_angle_of_attack(float &angle_of_attack) const
 		return false;
 	}
 
-	angle_of_attack = atan2f(-airspeed_body(2), airspeed_body(0));
-	return PX4_ISFINITE(angle_of_attack) && fabsf(angle_of_attack) < math::radians(30.f);
+	airflow_angle = axis == PITCH ? atan2f(-airspeed_body(2), airspeed_body(0))
+					  : atan2f(airspeed_body(1), sqrtf(airspeed_body(0) * airspeed_body(0)
+										  + airspeed_body(2) * airspeed_body(2)));
+	return PX4_ISFINITE(airflow_angle) && fabsf(airflow_angle) < math::radians(30.f);
 }
 
 bool FwGainDesign::flight_test_conditions_met(Axis axis, float &true_airspeed) const
@@ -1275,12 +1297,15 @@ void FwGainDesign::update_flight_test()
 		const float amplitude = _param_fw_gd_exc_amp.get();
 		const float frequency = _param_fw_gd_exc_freq.get();
 		const float pitch_frequency_ratio = _param_fw_gd_p_frat.get();
+		const float yaw_frequency_ratio = _param_fw_gd_y_frat.get();
 		const float duration = _param_fw_gd_exc_time.get();
+		const bool coupled_axis = _excitation_axis == PITCH || _excitation_axis == YAW;
+		const float coupled_frequency_ratio = _excitation_axis == PITCH ? pitch_frequency_ratio : yaw_frequency_ratio;
 
 		if (!PX4_ISFINITE(amplitude) || !PX4_ISFINITE(frequency) || !PX4_ISFINITE(duration)
 		    || amplitude <= 0.f || frequency <= 0.f || duration <= kExcitationRampTimeS
-		    || (_excitation_axis == PITCH && (!PX4_ISFINITE(pitch_frequency_ratio)
-							 || pitch_frequency_ratio < 1.2f || pitch_frequency_ratio > 3.f
+		    || (coupled_axis && (!PX4_ISFINITE(coupled_frequency_ratio)
+							 || coupled_frequency_ratio < 1.2f || coupled_frequency_ratio > 3.f
 							 || duration * 0.5f <= 2.f * kExcitationRampTimeS + 3.f / frequency))) {
 			abort_excitation(fw_gain_design_s::EXCITATION_ABORT_INVALID_CONFIGURATION);
 			return;
@@ -1357,26 +1382,26 @@ void FwGainDesign::update_flight_test()
 		return;
 	}
 
-	const bool pitch_test = _excitation_axis == PITCH;
-	const float pitch_frequency_ratio = _param_fw_gd_p_frat.get();
-	const float segment_duration = pitch_test ? _excitation_duration * 0.5f : _excitation_duration;
-	const uint8_t frequency_index = pitch_test && elapsed >= segment_duration ? 1U : 0U;
-	const float segment_elapsed = pitch_test ? elapsed - frequency_index * segment_duration : elapsed;
-	const float active_frequency = pitch_test && frequency_index == 1U ? _excitation_frequency * pitch_frequency_ratio
+	const bool coupled_test = _excitation_axis == PITCH || _excitation_axis == YAW;
+	const float frequency_ratio = _excitation_axis == PITCH ? _param_fw_gd_p_frat.get() : _param_fw_gd_y_frat.get();
+	const float segment_duration = coupled_test ? _excitation_duration * 0.5f : _excitation_duration;
+	const uint8_t frequency_index = coupled_test && elapsed >= segment_duration ? 1U : 0U;
+	const float segment_elapsed = coupled_test ? elapsed - frequency_index * segment_duration : elapsed;
+	const float active_frequency = coupled_test && frequency_index == 1U ? _excitation_frequency * frequency_ratio
 										 : _excitation_frequency;
-	const float ramp = pitch_test ? math::constrain(fminf(segment_elapsed / kExcitationRampTimeS,
+	const float ramp = coupled_test ? math::constrain(fminf(segment_elapsed / kExcitationRampTimeS,
 										(segment_duration - segment_elapsed) / kExcitationRampTimeS), 0.f, 1.f)
 							 : math::constrain(elapsed / kExcitationRampTimeS, 0.f, 1.f);
 	const float phase = 2.f * M_PI_F * active_frequency * segment_elapsed;
 	_excitation_rate_sp = _excitation_amplitude * ramp * sinf(phase);
-	const bool collect_sample = pitch_test
+	const bool collect_sample = coupled_test
 						? segment_elapsed >= kExcitationRampTimeS + 1.f / active_frequency
 						  && segment_elapsed <= segment_duration - kExcitationRampTimeS
 						: elapsed >= kExcitationRampTimeS + 1.f / active_frequency;
 
 	bool local_position_updated = false;
 
-	if (pitch_test) {
+	if (coupled_test) {
 		_vehicle_attitude_sub.update();
 		local_position_updated = _vehicle_local_position_sub.update();
 		_wind_sub.update();
@@ -1385,22 +1410,22 @@ void FwGainDesign::update_flight_test()
 	if (_last_estimator_sample != angular_velocity.timestamp_sample && _last_estimator_sample != 0) {
 		const float dt = (angular_velocity.timestamp_sample - _last_estimator_sample) * 1e-6f;
 		float control_input = NAN;
-		float angle_of_attack = NAN;
+		float airflow_angle = NAN;
 		const bool input_valid = control_surface_input(_excitation_axis, control_input);
 		const vehicle_local_position_s &local_position = _vehicle_local_position_sub.get();
 		const hrt_abstime alpha_rate_sample_delta = local_position.timestamp_sample > angular_velocity.timestamp_sample
 									 ? local_position.timestamp_sample - angular_velocity.timestamp_sample
 									 : angular_velocity.timestamp_sample - local_position.timestamp_sample;
-		const bool alpha_valid = !pitch_test || (local_position_updated && alpha_rate_sample_delta <= 50_ms
-										   && estimate_angle_of_attack(angle_of_attack));
+		const bool airflow_valid = !coupled_test || (local_position_updated && alpha_rate_sample_delta <= 50_ms
+											   && estimate_airflow_angle(_excitation_axis, airflow_angle));
 
-		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid && alpha_valid) {
-			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], control_input, angle_of_attack,
+		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid && airflow_valid) {
+			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], control_input, airflow_angle,
 					 true_airspeed, dt, phase, frequency_index, collect_sample);
 		}
 	}
 
-	if (!pitch_test || local_position_updated) {
+	if (!coupled_test || local_position_updated) {
 		_last_estimator_sample = angular_velocity.timestamp_sample;
 	}
 }
@@ -1428,6 +1453,7 @@ void FwGainDesign::fill_flight_test_status(fw_gain_design_s &design) const
 	}
 
 	design.identified_pitch_cm_alpha = _identified_pitch_cm_alpha;
+	design.identified_yaw_cn_beta = _identified_yaw_cn_beta;
 
 	design.excitation_state = _excitation_state;
 	design.excitation_axis = static_cast<uint8_t>(_excitation_axis);

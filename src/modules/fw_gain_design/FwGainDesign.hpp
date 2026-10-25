@@ -98,12 +98,12 @@ private:
 	void calculate_design(float true_airspeed, fw_gain_design_s &design) const;
 	void update_flight_test();
 	void reset_estimator(Axis axis);
-	void update_estimator(Axis axis, float rate, float control_input, float angle_of_attack, float true_airspeed,
+	void update_estimator(Axis axis, float rate, float control_input, float airflow_angle, float true_airspeed,
 			      float dt, float phase, uint8_t frequency_index, bool collect_sample);
 	void finalize_estimate(Axis axis);
-	void finalize_pitch_estimate();
+	void finalize_coupled_estimate(Axis axis);
 	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
-	bool estimate_angle_of_attack(float &angle_of_attack) const;
+	bool estimate_airflow_angle(Axis axis, float &airflow_angle) const;
 	bool control_surface_input(Axis axis, float &control_input) const;
 	void update_control_surface_mapping();
 	bool model_source_is_estimated(Axis axis) const;
@@ -138,7 +138,7 @@ private:
 	struct HarmonicMeasurement {
 		HarmonicSignal rate;
 		HarmonicSignal control;
-		HarmonicSignal angle_of_attack;
+		HarmonicSignal airflow_angle;
 		float sum_cos{0.f};
 		float sum_sin{0.f};
 		float sum_cos_sq{0.f};
@@ -155,7 +155,7 @@ private:
 		HarmonicMeasurement measurement[2];
 		float filtered_rate{NAN};
 		float filtered_control{NAN};
-		float filtered_angle_of_attack{NAN};
+		float filtered_airflow_angle{NAN};
 		bool filters_initialized{false};
 		bool initialized{false};
 	};
@@ -174,6 +174,7 @@ private:
 		float rate_b[AXIS_COUNT];
 		float airspeed[AXIS_COUNT];
 		float pitch_cm_alpha;
+		float yaw_cn_beta;
 		uint32_t checksum;
 	};
 
@@ -210,6 +211,7 @@ private:
 	float _identified_rate_b[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_airspeed[AXIS_COUNT] {NAN, NAN, NAN};
 	float _identified_pitch_cm_alpha{NAN};
+	float _identified_yaw_cn_beta{NAN};
 	float _identification_fit[AXIS_COUNT] {NAN, NAN, NAN};
 	bool _identified_valid[AXIS_COUNT] {};
 	uint8_t _identification_reject_reason[AXIS_COUNT] {
@@ -292,6 +294,7 @@ private:
 		(ParamFloat<px4::params::FW_GD_EXC_AMP>) _param_fw_gd_exc_amp,
 		(ParamFloat<px4::params::FW_GD_EXC_FREQ>) _param_fw_gd_exc_freq,
 		(ParamFloat<px4::params::FW_GD_P_FRAT>) _param_fw_gd_p_frat,
+		(ParamFloat<px4::params::FW_GD_Y_FRAT>) _param_fw_gd_y_frat,
 		(ParamFloat<px4::params::FW_GD_EXC_TIME>) _param_fw_gd_exc_time,
 		(ParamFloat<px4::params::FW_GD_EXC_RMAX>) _param_fw_gd_exc_rmax,
 		(ParamFloat<px4::params::FW_GD_EST_FC>) _param_fw_gd_est_fc,

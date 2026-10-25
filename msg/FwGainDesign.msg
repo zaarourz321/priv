@@ -95,6 +95,7 @@ float32[3] identified_control_derivative # Cl_du, Cm_du, Cn_du [per rad]
 # elevator using two sequential sine tests; it is diagnostic and is not
 # automatically applied as a controller gain.
 float32 identified_pitch_cm_alpha         # Cm_alpha [per rad]
+float32 identified_yaw_cn_beta            # Cn_beta [per rad], yaw two-state result
 float32[3] identification_fit            # normalized RMS residual, lower is better
 bool[3] identification_valid
 
