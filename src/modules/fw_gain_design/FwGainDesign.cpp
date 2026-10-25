@@ -739,13 +739,13 @@ bool FwGainDesign::solve_3x3(float matrix[3][3], float vector[3], float solution
 }
 
 void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, float airflow_angle,
-				     float true_airspeed, float dt, float phase, uint8_t frequency_index, bool collect_sample)
+				     float identification_airspeed, float dt, float phase, uint8_t frequency_index, bool collect_sample)
 {
 	const uint8_t axis_index = static_cast<uint8_t>(axis);
 	RateEstimator &estimator = _estimator[axis_index];
 
 	if (!estimator.initialized || !PX4_ISFINITE(rate) || !PX4_ISFINITE(control_input)
-	    || !PX4_ISFINITE(true_airspeed) || true_airspeed <= 0.f
+	    || !PX4_ISFINITE(identification_airspeed) || identification_airspeed <= 0.f
 	    || !PX4_ISFINITE(dt) || dt <= 0.f || frequency_index >= 2
 	    || ((axis == PITCH || axis == YAW) && !PX4_ISFINITE(airflow_angle))) {
 		return;
@@ -808,7 +808,7 @@ void FwGainDesign::update_estimator(Axis axis, float rate, float control_input, 
 		measurement.airflow_angle.sum_sin += estimator.filtered_airflow_angle * sine;
 	}
 
-	measurement.airspeed_sum += true_airspeed;
+	measurement.airspeed_sum += identification_airspeed;
 	measurement.accumulation_duration_s += dt;
 	measurement.sample_count++;
 }
@@ -1205,9 +1205,21 @@ bool FwGainDesign::estimate_airflow_angle(Axis axis, float &airflow_angle) const
 	return PX4_ISFINITE(airflow_angle) && fabsf(airflow_angle) < math::radians(30.f);
 }
 
-bool FwGainDesign::flight_test_conditions_met(Axis axis, float &true_airspeed) const
+bool FwGainDesign::flight_test_conditions_met(Axis axis, float &identification_airspeed) const
 {
-	true_airspeed = _airspeed_validated_sub.get().true_airspeed_m_s;
+	const airspeed_validated_s &airspeed = _airspeed_validated_sub.get();
+	const int32_t airspeed_source = _param_fw_gd_id_aspd.get();
+
+	if (airspeed_source == 0) {
+		identification_airspeed = airspeed.true_airspeed_m_s;
+
+	} else if (airspeed_source == 1) {
+		identification_airspeed = airspeed.indicated_airspeed_m_s;
+
+	} else {
+		return false;
+	}
+
 	const vehicle_status_s &vehicle_status = _vehicle_status_sub.get();
 	const vehicle_control_mode_s &control_mode = _vehicle_control_mode_sub.get();
 	const vehicle_land_detected_s &land_detected = _vehicle_land_detected_sub.get();
@@ -1235,13 +1247,12 @@ bool FwGainDesign::flight_test_conditions_met(Axis axis, float &true_airspeed) c
 
 	const float vmin = _param_fw_gd_vmin.get();
 	const float vmax = _param_fw_gd_vmax.get();
-	const airspeed_validated_s &airspeed = _airspeed_validated_sub.get();
 	const vehicle_angular_velocity_s &angular_velocity = _vehicle_angular_velocity_sub.get();
 
-	return PX4_ISFINITE(true_airspeed) && PX4_ISFINITE(vmin) && PX4_ISFINITE(vmax)
+	return PX4_ISFINITE(identification_airspeed) && PX4_ISFINITE(vmin) && PX4_ISFINITE(vmax)
 	       && hrt_elapsed_time(&airspeed.timestamp) < 500_ms
 	       && hrt_elapsed_time(&angular_velocity.timestamp) < 100_ms
-	       && true_airspeed >= vmin && true_airspeed <= vmax;
+	       && identification_airspeed >= vmin && identification_airspeed <= vmax;
 }
 
 bool FwGainDesign::request_excitation(Axis axis)
@@ -1326,9 +1337,9 @@ void FwGainDesign::update_flight_test()
 	}
 
 	if (_excitation_state == fw_gain_design_s::EXCITATION_STATE_WAITING_FOR_CONDITIONS) {
-		float true_airspeed = NAN;
+		float identification_airspeed = NAN;
 
-		if (!flight_test_conditions_met(_excitation_axis, true_airspeed)) {
+		if (!flight_test_conditions_met(_excitation_axis, identification_airspeed)) {
 			return;
 		}
 
@@ -1353,9 +1364,9 @@ void FwGainDesign::update_flight_test()
 		return;
 	}
 
-	float true_airspeed = NAN;
+	float identification_airspeed = NAN;
 
-	if (!flight_test_conditions_met(_excitation_axis, true_airspeed)) {
+	if (!flight_test_conditions_met(_excitation_axis, identification_airspeed)) {
 		abort_excitation(_excitation_axis == YAW && _param_fw_yaw_damp_en.get() != 0
 				 ? fw_gain_design_s::EXCITATION_ABORT_YAW_DAMPER
 				 : fw_gain_design_s::EXCITATION_ABORT_FLIGHT_CONDITIONS);
@@ -1423,7 +1434,7 @@ void FwGainDesign::update_flight_test()
 
 		if (PX4_ISFINITE(dt) && dt >= 0.002f && dt <= 0.1f && input_valid && airflow_valid) {
 			update_estimator(_excitation_axis, angular_velocity.xyz[axis_index], control_input, airflow_angle,
-					 true_airspeed, dt, phase, frequency_index, collect_sample);
+					 identification_airspeed, dt, phase, frequency_index, collect_sample);
 		}
 	}
 

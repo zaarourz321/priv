@@ -98,11 +98,11 @@ private:
 	void calculate_design(float true_airspeed, fw_gain_design_s &design) const;
 	void update_flight_test();
 	void reset_estimator(Axis axis);
-	void update_estimator(Axis axis, float rate, float control_input, float airflow_angle, float true_airspeed,
+	void update_estimator(Axis axis, float rate, float control_input, float airflow_angle, float identification_airspeed,
 			      float dt, float phase, uint8_t frequency_index, bool collect_sample);
 	void finalize_estimate(Axis axis);
 	void finalize_coupled_estimate(Axis axis);
-	bool flight_test_conditions_met(Axis axis, float &true_airspeed) const;
+	bool flight_test_conditions_met(Axis axis, float &identification_airspeed) const;
 	bool estimate_airflow_angle(Axis axis, float &airflow_angle) const;
 	bool control_surface_input(Axis axis, float &control_input) const;
 	void update_control_surface_mapping();
@@ -291,6 +291,7 @@ private:
 		(ParamInt<px4::params::FW_GD_P_SRC>) _param_fw_gd_p_src,
 		(ParamInt<px4::params::FW_GD_Y_SRC>) _param_fw_gd_y_src,
 		(ParamInt<px4::params::FW_GD_EXC_AXIS>) _param_fw_gd_exc_axis,
+		(ParamInt<px4::params::FW_GD_ID_ASPD>) _param_fw_gd_id_aspd,
 		(ParamFloat<px4::params::FW_GD_EXC_AMP>) _param_fw_gd_exc_amp,
 		(ParamFloat<px4::params::FW_GD_EXC_FREQ>) _param_fw_gd_exc_freq,
 		(ParamFloat<px4::params::FW_GD_P_FRAT>) _param_fw_gd_p_frat,

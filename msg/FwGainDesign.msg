@@ -86,7 +86,7 @@ uint8 EXCITATION_ABORT_YAW_DAMPER = 6
 # + b * command. Candidate values are published even when they are rejected;
 # only identification_valid permits them to be used for gain design.
 uint32[3] identification_sample_count
-float32[3] identified_airspeed
+float32[3] identified_airspeed            # selected TAS or IAS used for derivative conversion [m/s]
 float32[3] identified_rate_a
 float32[3] identified_rate_b
 float32[3] identified_damping_derivative # Cl_p, Cm_q, Cn_r

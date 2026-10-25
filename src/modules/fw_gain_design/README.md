@@ -103,6 +103,12 @@ velocity rotated into body axes and subtracts a fresh EKF wind estimate when
 available. A zero-wind fallback is provided for HIL, but a valid wind estimate
 is recommended for real-flight physical derivatives.
 
+`FW_GD_ID_ASPD` selects the airspeed used by the flight-identification test:
+`0` uses true airspeed (TAS) and `1` uses indicated airspeed (IAS, the default).
+It controls test gating, the recorded `identified_airspeed`, and conversion to
+the reported aerodynamic derivatives. It does not change the separate live
+gain schedule, which continues to use TAS.
+
 During a test it adds one small, zero-mean, single-frequency sinusoidal
 **body-rate setpoint** to the normal fixed-wing attitude controller. It never
 publishes a competing `vehicle_torque_setpoint`.

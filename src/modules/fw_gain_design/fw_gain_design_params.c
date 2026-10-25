@@ -468,6 +468,21 @@ PARAM_DEFINE_INT32(FW_GD_Y_SRC, 0);
 PARAM_DEFINE_INT32(FW_GD_EXC_AXIS, 0);
 
 /**
+ * Flight-identification airspeed source
+ *
+ * Selects the airspeed used to gate a flight test and to convert the measured
+ * dimensional dynamics into aerodynamic derivatives. This does not affect the
+ * separate live gain schedule, which remains based on true airspeed.
+ *
+ * @value 0 True airspeed (TAS)
+ * @value 1 Indicated airspeed (IAS)
+ * @min 0
+ * @max 1
+ * @group FW Gain Design Excitation
+ */
+PARAM_DEFINE_INT32(FW_GD_ID_ASPD, 1);
+
+/**
  * Flight-test rate-setpoint amplitude
  *
  * Peak amplitude of the zero-mean sine rate setpoint injected during an
