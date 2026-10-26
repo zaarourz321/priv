@@ -2745,25 +2745,46 @@ FixedwingPositionControl::apply_gpsless_tube_launch_lateral()
 	// This is deliberately part of the tube-launch state machine, not the
 	// generic GPS fallback. In particular, vehicle_gps_position may retain one
 	// apparently-good sample while the aircraft leaves the tube. Releasing on
-	// that sample would make the fixed launch heading ineffective.
-	const bool tube_heading_active = gpsless_tube_launch_enabled()
+	// that sample would make the configured GPS-less post-launch behavior
+	// ineffective.
+	const bool tube_lateral_active = gpsless_tube_launch_enabled()
 					 && _control_mode.flag_armed
 					 && _gpsless_tube_launch_started
 					 && (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF)
-					 && !_gpsless_tube_launch_gps_recovered
-					 && _param_fw_gpsfb_tk_en.get();
+					 && !_gpsless_tube_launch_gps_recovered;
 
-	if (!tube_heading_active) {
+	if (!tube_lateral_active) {
 		return false;
 	}
 
 	const float max_roll = radians(_param_fw_gpsfb_max_r.get());
 	_gps_fallback_yaw_hold_active = false;
 	_gps_fallback_loiter_active = false;
-	_gps_fallback_takeoff_heading_active = true;
-	_gps_fallback_yaw_error = wrap_pi(radians(_param_fw_gpsfb_tk_hdg.get()) - _yaw);
-	_att_sp.roll_body = constrain(_param_fw_gpsfb_tk_p.get() * _gps_fallback_yaw_error
-				      - _param_fw_gpsfb_tk_d.get() * _yawrate, -max_roll, max_roll);
+	_gps_fallback_takeoff_heading_active = false;
+	_gps_fallback_yaw_error = NAN;
+
+	// When GPS is unavailable after a tube launch, the dedicated GPS-less
+	// controller owns lateral guidance. A configured blind loiter takes
+	// priority; otherwise maintain the configured post-launch heading.
+	if (_param_fw_gpsfb_ltr_en.get() && (_param_fw_gpsfb_ltr_rad.get() > FLT_EPSILON)
+	    && PX4_ISFINITE(_airspeed)) {
+		_att_sp.roll_body = constrain(atanf((_airspeed * _airspeed)
+							     / (CONSTANTS_ONE_G * _param_fw_gpsfb_ltr_rad.get())),
+						     -max_roll, max_roll);
+		_gps_fallback_loiter_active = true;
+
+	} else if (_param_fw_gpsfb_tk_en.get()) {
+		_gps_fallback_takeoff_heading_active = true;
+		_gps_fallback_yaw_error = wrap_pi(radians(_param_fw_gpsfb_tk_hdg.get()) - _yaw);
+		_att_sp.roll_body = constrain(_param_fw_gpsfb_tk_p.get() * _gps_fallback_yaw_error
+					      - _param_fw_gpsfb_tk_d.get() * _yawrate, -max_roll, max_roll);
+
+	} else {
+		// Do not fall through to the generic GPS-fallback controller. It is not
+		// allowed to override the GPS-less launch state machine.
+		_att_sp.roll_body = 0.f;
+	}
+
 	_gps_fallback_roll_setpoint = _att_sp.roll_body;
 
 	return true;
@@ -2795,21 +2816,6 @@ FixedwingPositionControl::apply_gps_fallback_lateral()
 	}
 
 	const float max_roll = radians(_param_fw_gpsfb_max_r.get());
-
-	if ((_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF) && _param_fw_gpsfb_tk_en.get()) {
-		if (_current_altitude < _param_fw_gpsfb_tk_alt.get()) {
-			_att_sp.roll_body = 0.f;
-
-		} else {
-			_gps_fallback_yaw_error = wrap_pi(radians(_param_fw_gpsfb_tk_hdg.get()) - _yaw);
-			_att_sp.roll_body = constrain(_param_fw_gpsfb_tk_p.get() * _gps_fallback_yaw_error
-						      - _param_fw_gpsfb_tk_d.get() * _yawrate, -max_roll, max_roll);
-		}
-
-		_gps_fallback_takeoff_heading_active = true;
-		_gps_fallback_roll_setpoint = _att_sp.roll_body;
-		return;
-	}
 
 	const bool supported_navigation_state = (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION)
 							|| (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER)

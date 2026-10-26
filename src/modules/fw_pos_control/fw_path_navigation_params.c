@@ -1267,12 +1267,10 @@ PARAM_DEFINE_INT32(FW_GPSFB_LTR_EN, 0);
 PARAM_DEFINE_FLOAT(FW_GPSFB_LTR_RAD, 150.0f);
 
 /**
- * Enable predefined heading during GPS-loss takeoff
+ * Enable GPS-less post-launch predefined heading
  *
- * Above FW_GPSFB_TK_ALT, commands roll to hold FW_GPSFB_TK_HDG if GPS is
- * unhealthy during a non-GPS-less AUTO takeoff. It also enables the same
- * predefined heading after a GPS-less tube takeoff until a fresh,
- * quality-checked GPS sample is received after leaving the tube.
+ * When GPS has not recovered after a GPS-less tube launch, commands roll to
+ * hold FW_GPSFB_TK_HDG. A configured FW_GPSFB_LTR_EN loiter takes priority.
  *
  * @boolean
  * @group FW GPS Fallback
@@ -1280,10 +1278,10 @@ PARAM_DEFINE_FLOAT(FW_GPSFB_LTR_RAD, 150.0f);
 PARAM_DEFINE_INT32(FW_GPSFB_TK_EN, 1);
 
 /**
- * GPS-loss takeoff heading
+ * GPS-less post-launch heading
  *
- * Fixed heading used during a non-GPS-less takeoff while GPS is unhealthy,
- * and after a GPS-less tube takeoff until fresh GPS reception resumes.
+ * Fixed heading used after a GPS-less tube takeoff until fresh GPS reception
+ * resumes, unless GPS-loss loiter is enabled.
  *
  * @unit deg
  * @min -180.0
@@ -1317,21 +1315,6 @@ PARAM_DEFINE_FLOAT(FW_GPSFB_TK_P, 0.5f);
  * @group FW GPS Fallback
  */
 PARAM_DEFINE_FLOAT(FW_GPSFB_TK_D, 0.1f);
-
-/**
- * GPS-loss takeoff heading activation altitude
- *
- * Below this controller altitude, zero roll is commanded during a GPS-loss
- * takeoff for a straight launch.
- *
- * @unit m
- * @min 0.0
- * @max 500.0
- * @decimal 1
- * @increment 1.0
- * @group FW GPS Fallback
- */
-PARAM_DEFINE_FLOAT(FW_GPSFB_TK_ALT, 30.0f);
 
 /**
  * Flaps setting during take-off

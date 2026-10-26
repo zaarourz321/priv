@@ -1088,8 +1088,7 @@ private:
 		(ParamBool<px4::params::FW_GPSFB_TK_EN>) _param_fw_gpsfb_tk_en,
 		(ParamFloat<px4::params::FW_GPSFB_TK_HDG>) _param_fw_gpsfb_tk_hdg,
 		(ParamFloat<px4::params::FW_GPSFB_TK_P>) _param_fw_gpsfb_tk_p,
-		(ParamFloat<px4::params::FW_GPSFB_TK_D>) _param_fw_gpsfb_tk_d,
-		(ParamFloat<px4::params::FW_GPSFB_TK_ALT>) _param_fw_gpsfb_tk_alt
+		(ParamFloat<px4::params::FW_GPSFB_TK_D>) _param_fw_gpsfb_tk_d
 	)
 
 };

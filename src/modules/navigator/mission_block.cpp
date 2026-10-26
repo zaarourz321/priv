@@ -205,6 +205,17 @@ MissionBlock::is_mission_item_reached_or_completed()
 		break;
 	}
 
+	// A GPS-less tube launch has its own measured takeoff height. Do not gate
+	// that completion condition on the land detector: during a catapult/tube
+	// launch it can remain landed after the aircraft has already reached the
+	// configured barometric takeoff height.
+	if (!_waypoint_position_reached
+	    && (_mission_item.nav_cmd == NAV_CMD_TAKEOFF)
+	    && (_navigator->get_vstatus()->vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)
+	    && gpsless_tube_takeoff_reached()) {
+		_waypoint_position_reached = true;
+	}
+
 	// Update the 'waypoint position reached' status
 	if (!_navigator->get_land_detected()->landed && !_waypoint_position_reached) {
 
@@ -251,12 +262,10 @@ MissionBlock::is_mission_item_reached_or_completed()
 
 		} else if (_mission_item.nav_cmd == NAV_CMD_TAKEOFF
 			   && _navigator->get_vstatus()->vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING) {
-			// In normal flight, a fixed-wing takeoff is reached once the global
-			// estimator altitude exceeds the mission altitude. GPS-less tube launch
-			// has no trustworthy global altitude in the tube, so use the exact same
-			// barometric launch reference and FW_GPSL_TKO_ALT used by TECS.
-			if (gpsless_tube_takeoff_reached()
-		    || (_navigator->get_global_position()->alt > mission_item_altitude_amsl)) {
+			// The GPS-less tube-launch condition is handled above because it must
+			// not depend on the land detector. Normal takeoff still uses the
+			// estimator altitude.
+			if (_navigator->get_global_position()->alt > mission_item_altitude_amsl) {
 				_waypoint_position_reached = true;
 			}
 
