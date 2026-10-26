@@ -70,6 +70,7 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionCallback.hpp>
 #include <uORB/topics/airspeed_validated.h>
+#include <uORB/topics/gpsless_takeoff_status.h>
 #include <uORB/topics/landing_gear.h>
 #include <uORB/topics/launch_detection_status.h>
 #include <uORB/topics/manual_control_setpoint.h>
@@ -212,6 +213,7 @@ private:
 	uORB::Publication<position_controller_landing_status_s>	_pos_ctrl_landing_status_pub{ORB_ID(position_controller_landing_status)};
 	uORB::Publication<tecs_status_s> _tecs_status_pub{ORB_ID(tecs_status)};
 	uORB::Publication<launch_detection_status_s> _launch_detection_status_pub{ORB_ID(launch_detection_status)};
+	uORB::Publication<gpsless_takeoff_status_s> _gpsless_takeoff_status_pub{ORB_ID(gpsless_takeoff_status)};
 	uORB::PublicationMulti<orbit_status_s> _orbit_status_pub{ORB_ID(orbit_status)};
 	uORB::Publication<landing_gear_s> _landing_gear_pub{ORB_ID(landing_gear)};
 	uORB::Publication<normalized_unsigned_setpoint_s> _flaps_setpoint_pub{ORB_ID(flaps_setpoint)};
@@ -329,6 +331,7 @@ private:
 	float _gpsless_tube_launch_baro_reference{NAN};
 	bool _gpsless_tube_launch_baro_altitude_active{false};
 	bool _gpsless_tube_launch_started{false};
+	float _gpsless_tube_launch_post_takeoff_altitude{NAN};
 	hrt_abstime _gpsless_tube_launch_takeoff_complete_time{0};
 	hrt_abstime _gpsless_tube_launch_estimator_healthy_since{0};
 
@@ -462,6 +465,7 @@ private:
 	void landing_status_publish();
 	void tecs_status_publish(float alt_sp, float equivalent_airspeed_sp, float true_airspeed_derivative_raw,
 				 float throttle_trim);
+	void gpsless_takeoff_status_publish(const hrt_abstime now);
 	void publishLocalPositionSetpoint(const position_setpoint_s &current_waypoint);
 
 	/**
@@ -697,6 +701,7 @@ private:
 
 	bool gpsless_tube_launch_enabled() const;
 	bool gpsless_tube_launch_active();
+	bool gpsless_tube_launch_post_takeoff_hold_active() const;
 	float takeoff_altitude_for_tecs() const;
 	float takeoff_altitude_rate_for_tecs() const;
 	void update_gpsless_tube_launch_reference(const hrt_abstime now);

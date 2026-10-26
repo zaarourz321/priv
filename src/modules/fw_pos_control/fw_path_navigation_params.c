@@ -1043,9 +1043,12 @@ PARAM_DEFINE_FLOAT(FW_GPSL_TKO_ALT, 30.0f);
  * Keep barometric altitude after GPS-less takeoff
  *
  * When enabled, barometric altitude remains the TECS measurement after the
- * takeoff mission item completes. It returns to the estimator only after the
- * configured hold and convergence checks pass. Disable to return to the
- * normal estimator altitude as soon as AUTO takeoff ends.
+ * takeoff mission item completes. The barometric altitude at that transition
+ * is also held as the TECS altitude demand, preventing the next mission item
+ * from causing a pitch command while the estimator recovers. Normal mission
+ * altitude control returns only after the configured hold and convergence
+ * checks pass. Disable to return to the normal estimator altitude as soon as
+ * AUTO takeoff ends.
  *
  * @boolean
  * @group FW GPS-less Launch

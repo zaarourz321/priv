@@ -67,6 +67,7 @@ FixedwingPositionControl::FixedwingPositionControl(bool vtol) :
 	_pos_ctrl_landing_status_pub.advertise();
 	_tecs_status_pub.advertise();
 	_launch_detection_status_pub.advertise();
+	_gpsless_takeoff_status_pub.advertise();
 	_landing_gear_pub.advertise();
 
 	_flaps_setpoint_pub.advertise();
@@ -518,6 +519,69 @@ FixedwingPositionControl::tecs_status_publish(float alt_sp, float equivalent_air
 	tecs_status.timestamp = hrt_absolute_time();
 
 	_tecs_status_pub.publish(tecs_status);
+}
+
+void
+FixedwingPositionControl::gpsless_takeoff_status_publish(const hrt_abstime now)
+{
+	gpsless_takeoff_status_s status{};
+	const bool baro_valid = PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
+				&& (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000);
+	const bool gps_healthy = gpsless_tube_launch_estimator_healthy();
+	const float altitude_difference = (baro_valid && PX4_ISFINITE(_current_altitude)) ?
+					  fabsf(_current_altitude - _baro_altitude) : NAN;
+	const bool altitude_converged = gps_healthy && PX4_ISFINITE(altitude_difference)
+					&& (altitude_difference <= _param_fw_gpsl_alt_err.get());
+	const float post_takeoff_elapsed_s = (_gpsless_tube_launch_takeoff_complete_time != 0) ?
+					     (now - _gpsless_tube_launch_takeoff_complete_time) * 1e-6f : NAN;
+	const float gps_healthy_elapsed_s = (_gpsless_tube_launch_estimator_healthy_since != 0) ?
+					  (now - _gpsless_tube_launch_estimator_healthy_since) * 1e-6f : NAN;
+	const bool post_hold_complete = PX4_ISFINITE(post_takeoff_elapsed_s)
+					&& (post_takeoff_elapsed_s >= _param_fw_gpsl_hold_t.get());
+	const bool gps_healthy_complete = PX4_ISFINITE(gps_healthy_elapsed_s)
+					&& (gps_healthy_elapsed_s >= _param_fw_gpsl_gps_t.get());
+
+	status.timestamp = now;
+	status.enabled = gpsless_tube_launch_enabled();
+	status.post_takeoff_hold_enabled = _param_fw_gpsl_post_en.get();
+	status.active = _gpsless_tube_launch_baro_altitude_active;
+	status.using_baro_altitude = gpsless_tube_launch_active();
+	status.baro_valid = baro_valid;
+	status.gps_healthy = gps_healthy;
+	status.altitude_converged = altitude_converged;
+	status.handover_ready = _gpsless_tube_launch_baro_altitude_active && (_gpsless_tube_launch_takeoff_complete_time != 0)
+					&& post_hold_complete && gps_healthy_complete;
+
+	if (!status.enabled) {
+		status.state = gpsless_takeoff_status_s::STATE_DISABLED;
+
+	} else if (!_gpsless_tube_launch_baro_reference_valid) {
+		status.state = gpsless_takeoff_status_s::STATE_WAITING_FOR_BARO;
+
+	} else if (_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF) {
+		status.state = gpsless_takeoff_status_s::STATE_TAKEOFF;
+
+	} else if (_gpsless_tube_launch_baro_altitude_active) {
+		status.state = gpsless_takeoff_status_s::STATE_POST_TAKEOFF_HOLD;
+
+	} else {
+		status.state = gpsless_takeoff_status_s::STATE_ESTIMATOR;
+	}
+
+	status.global_altitude = _current_altitude;
+	status.baro_altitude = baro_valid ? _baro_altitude : NAN;
+	status.used_altitude = takeoff_altitude_for_tecs();
+	status.hold_altitude_setpoint = _gpsless_tube_launch_post_takeoff_altitude;
+	status.launch_baro_altitude = _gpsless_tube_launch_baro_reference_valid ? _gpsless_tube_launch_baro_reference : NAN;
+	status.altitude_difference = altitude_difference;
+	status.global_eph = (_global_position.timestamp != 0) ? _global_position.eph : NAN;
+	status.global_epv = (_global_position.timestamp != 0) ? _global_position.epv : NAN;
+	status.post_takeoff_elapsed_s = post_takeoff_elapsed_s;
+	status.post_takeoff_hold_timeout_s = _param_fw_gpsl_hold_t.get();
+	status.gps_healthy_elapsed_s = gps_healthy_elapsed_s;
+	status.gps_healthy_timeout_s = _param_fw_gpsl_gps_t.get();
+
+	_gpsless_takeoff_status_pub.publish(status);
 }
 
 void
@@ -2330,8 +2394,18 @@ FixedwingPositionControl::Run()
 		Vector2d curr_pos(_current_latitude, _current_longitude);
 		Vector2f ground_speed(_local_pos.vx, _local_pos.vy);
 
+		const FW_POSCTRL_MODE previous_control_mode = _control_mode_current;
 		set_control_mode_current(_local_pos.timestamp);
 		update_gpsless_tube_launch_reference(_local_pos.timestamp);
+
+		// A TAKEOFF item can end while the TECS altitude reference is still
+		// below the aircraft. Re-seed it from the measured altitude when normal
+		// mission control takes over, so TECS does not command a false descent
+		// before following the next mission altitude setpoint.
+		if ((previous_control_mode == FW_POSCTRL_MODE_AUTO_TAKEOFF)
+		    && (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF)) {
+			_tecs.handle_alt_step(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs());
+		}
 
 		update_in_air_states(_local_pos.timestamp);
 
@@ -2421,6 +2495,8 @@ FixedwingPositionControl::Run()
 			}
 
 		}
+
+		gpsless_takeoff_status_publish(_local_pos.timestamp);
 
 		if (_control_mode_current != FW_POSCTRL_MODE_OTHER) {
 
@@ -2544,8 +2620,17 @@ FixedwingPositionControl::reset_gpsless_tube_launch_state()
 	_gpsless_tube_launch_baro_reference = NAN;
 	_gpsless_tube_launch_baro_altitude_active = false;
 	_gpsless_tube_launch_started = false;
+	_gpsless_tube_launch_post_takeoff_altitude = NAN;
 	_gpsless_tube_launch_takeoff_complete_time = 0;
 	_gpsless_tube_launch_estimator_healthy_since = 0;
+}
+
+bool
+FixedwingPositionControl::gpsless_tube_launch_post_takeoff_hold_active() const
+{
+	return gpsless_tube_launch_enabled() && _gpsless_tube_launch_baro_altitude_active
+	       && _gpsless_tube_launch_started && (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF)
+	       && PX4_ISFINITE(_gpsless_tube_launch_post_takeoff_altitude);
 }
 
 bool
@@ -2600,6 +2685,8 @@ FixedwingPositionControl::update_gpsless_tube_launch_reference(const hrt_abstime
 
 		if (PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
 		    && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)) {
+			_gpsless_tube_launch_post_takeoff_altitude = _baro_altitude;
+
 			// Switch TECS from the tube-relative frame to the QNH/AMSL baro frame
 			// without retaining the old relative-height state.
 			_tecs.handle_alt_step(_baro_altitude, _baro_altitude_rate);
@@ -2741,6 +2828,14 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 		// next time we run TECS we should reinitialize states
 		_reinitialize_tecs = true;
 		return;
+	}
+
+	// Do not accept a lower altitude from the first LOITER/POSITION item while
+	// GPS-less launch is explicitly holding the barometric altitude source.
+	// This removes the post-takeoff pitch-down caused by the mission item
+	// changing before the estimator handover has been validated.
+	if (gpsless_tube_launch_post_takeoff_hold_active()) {
+		alt_sp = _gpsless_tube_launch_post_takeoff_altitude;
 	}
 
 	// We need an altitude lock to calculate the TECS control
