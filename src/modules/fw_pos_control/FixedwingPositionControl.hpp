@@ -352,6 +352,9 @@ private:
 	// Time at which AUTO takeoff handed control to the following mission item.
 	// Used to blend the takeoff pitch floor out rather than removing it abruptly.
 	hrt_abstime _takeoff_transition_time{0};
+	float _takeoff_completion_altitude{NAN};
+	float _post_takeoff_target_altitude{NAN};
+	bool _post_takeoff_climb_protection_active{false};
 
 	// [deg] global position of the vehicle at the time launch is detected (using launch detector)
 	Vector2d _launch_global_position{0, 0};
@@ -734,6 +737,7 @@ private:
 				      float calibrated_min_airspeed, const Vector2f &ground_speed, bool in_takeoff_situation = false);
 
 	void reset_takeoff_state();
+	void reset_post_takeoff_climb_protection();
 	void reset_landing_state();
 
 	bool gpsless_tube_launch_enabled() const;

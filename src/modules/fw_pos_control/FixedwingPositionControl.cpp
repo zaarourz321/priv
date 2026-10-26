@@ -218,6 +218,7 @@ FixedwingPositionControl::vehicle_control_mode_poll()
 				reset_takeoff_state();
 				reset_landing_state();
 				_takeoff_transition_time = 0;
+				reset_post_takeoff_climb_protection();
 			}
 		}
 	}
@@ -1402,6 +1403,13 @@ FixedwingPositionControl::control_auto_takeoff(const hrt_abstime &now, const flo
 
 	const bool gpsless_tube_launch = gpsless_tube_launch_active();
 
+	if (gpsless_tube_launch && _gpsless_tube_launch_baro_reference_valid) {
+		_takeoff_completion_altitude = _gpsless_tube_launch_baro_reference + _param_fw_gpsl_tko_alt.get();
+
+	} else {
+		_takeoff_completion_altitude = pos_sp_curr.alt;
+	}
+
 	// In a GPS-less tube launch both the TECS state and its altitude target are
 	// relative to the barometric altitude captured in the tube. In the normal
 	// path they remain AMSL values from Navigator.
@@ -2451,6 +2459,10 @@ FixedwingPositionControl::Run()
 		if ((previous_control_mode == FW_POSCTRL_MODE_AUTO_TAKEOFF)
 		    && (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF)) {
 			_takeoff_transition_time = _local_pos.timestamp;
+			_post_takeoff_target_altitude = _pos_sp_triplet.current.alt;
+			_post_takeoff_climb_protection_active = PX4_ISFINITE(_takeoff_completion_altitude)
+							       && PX4_ISFINITE(_post_takeoff_target_altitude)
+							       && (_post_takeoff_target_altitude >= _takeoff_completion_altitude);
 			_tecs.handle_alt_step(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs());
 		}
 
@@ -2621,6 +2633,14 @@ FixedwingPositionControl::reset_takeoff_state()
 	_launch_detected = false;
 
 	_takeoff_ground_alt = _current_altitude;
+}
+
+void
+FixedwingPositionControl::reset_post_takeoff_climb_protection()
+{
+	_takeoff_completion_altitude = NAN;
+	_post_takeoff_target_altitude = NAN;
+	_post_takeoff_climb_protection_active = false;
 }
 
 bool
@@ -3127,6 +3147,22 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 		pitch_min_rad = math::max(pitch_min_rad, blended_pitch_min);
 	}
 
+	float max_sinkrate = desired_max_sinkrate;
+
+	if (_post_takeoff_climb_protection_active) {
+		if (!PX4_ISFINITE(_takeoff_completion_altitude)
+		    || !PX4_ISFINITE(_post_takeoff_target_altitude)
+		    || !PX4_ISFINITE(alt_sp)
+		    || (alt_sp < _takeoff_completion_altitude)
+		    || (fabsf(alt_sp - _post_takeoff_target_altitude) > FLT_EPSILON)) {
+			_post_takeoff_climb_protection_active = false;
+
+		} else {
+			pitch_min_rad = math::max(pitch_min_rad, 0.f);
+			max_sinkrate = 0.f;
+		}
+	}
+
 	// We need an altitude lock to calculate the TECS control
 	if (_local_pos.timestamp == 0) {
 		_reinitialize_tecs = true;
@@ -3165,7 +3201,7 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 		     pitch_min_rad - radians(_param_fw_psp_off.get()),
 		     pitch_max_rad - radians(_param_fw_psp_off.get()),
 		     desired_max_climbrate,
-		     desired_max_sinkrate,
+		     max_sinkrate,
 		     airspeed_rate_estimate,
 		     takeoff_altitude_rate_for_tecs(),
 		     hgt_rate_sp);
