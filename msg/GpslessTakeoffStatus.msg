@@ -10,6 +10,8 @@ bool baro_valid                          # fresh finite barometric altitude is a
 bool gps_healthy                          # fused global position meets all configured handover quality checks
 bool altitude_converged                  # estimator and barometer are within FW_GPSL_ALT_ERR
 bool handover_ready                      # all time, health, and convergence conditions are met
+bool predefined_heading_active            # FW_GPSFB_TK_HDG is controlling roll after tube takeoff
+bool gps_recovered                        # raw GPS became healthy after tube takeoff
 
 uint8 state
 uint8 STATE_DISABLED = 0

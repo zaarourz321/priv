@@ -1270,7 +1270,9 @@ PARAM_DEFINE_FLOAT(FW_GPSFB_LTR_RAD, 150.0f);
  * Enable predefined heading during GPS-loss takeoff
  *
  * Above FW_GPSFB_TK_ALT, commands roll to hold FW_GPSFB_TK_HDG if GPS is
- * unhealthy during a non-GPS-less AUTO takeoff.
+ * unhealthy during a non-GPS-less AUTO takeoff. It also enables the same
+ * predefined heading after a GPS-less tube takeoff until raw GPS first
+ * becomes healthy again.
  *
  * @boolean
  * @group FW GPS Fallback
@@ -1280,7 +1282,8 @@ PARAM_DEFINE_INT32(FW_GPSFB_TK_EN, 1);
 /**
  * GPS-loss takeoff heading
  *
- * Fixed heading used during a non-GPS-less takeoff while GPS is unhealthy.
+ * Fixed heading used during a non-GPS-less takeoff while GPS is unhealthy,
+ * and after a GPS-less tube takeoff until GPS has recovered.
  *
  * @unit deg
  * @min -180.0

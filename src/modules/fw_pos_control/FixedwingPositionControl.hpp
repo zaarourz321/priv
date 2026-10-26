@@ -366,6 +366,7 @@ private:
 	float _gpsless_tube_launch_baro_reference{NAN};
 	bool _gpsless_tube_launch_baro_altitude_active{false};
 	bool _gpsless_tube_launch_started{false};
+	bool _gpsless_tube_launch_gps_recovered{false};
 	float _gpsless_tube_launch_post_takeoff_altitude{NAN};
 	hrt_abstime _gpsless_tube_launch_takeoff_complete_time{0};
 	hrt_abstime _gpsless_tube_launch_estimator_healthy_since{0};
