@@ -3180,7 +3180,9 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 
 	if (_post_takeoff_climb_protection_active) {
 		const float current_altitude = takeoff_altitude_for_tecs();
-		constexpr float post_takeoff_target_reached_margin = 1.f;
+		// Use the same vertical acceptance criterion as Navigator. This avoids
+		// an unrelated hard-coded release altitude for the takeoff handoff.
+		const float post_takeoff_target_reached_margin = math::max(_param_nav_fw_alt_rad.get(), 0.f);
 
 		if (!PX4_ISFINITE(_takeoff_completion_altitude)
 		    || !PX4_ISFINITE(_post_takeoff_target_altitude)
