@@ -2650,8 +2650,9 @@ FixedwingPositionControl::update_gps_fallback(const hrt_abstime now)
 					|| (_vehicle_gps_position.epv > _param_fw_gpsfb_epv.get());
 
 	// The existing dedicated tube-launch implementation provides its own TECS
-	// barometric source and handover. Never overwrite its navigation altitude.
-	_gps_fallback_suppressed = gpsless_tube_launch_enabled();
+	// barometric source and handover. Suppress only while that source is
+	// actually active: FW_GPSL_TKO_EN may remain enabled for the whole flight.
+	_gps_fallback_suppressed = _gpsless_tube_launch_baro_altitude_active;
 
 	const auto select_altitude_source = [this](const GpsFallbackAltitudeSource source) {
 		if (_gps_fallback_altitude_source == source) {
@@ -2719,7 +2720,13 @@ FixedwingPositionControl::apply_gps_fallback_lateral()
 	_gps_fallback_yaw_error = NAN;
 	_gps_fallback_roll_setpoint = NAN;
 
-	if (!gps_fallback_enabled() || _gps_fallback_suppressed || !_control_mode.flag_armed) {
+	// GPS-less tube launch must keep wings level during AUTO takeoff. Once that
+	// phase ends, GPS-loss heading hold/loiter may operate normally even if the
+	// barometric post-takeoff altitude hold is still active.
+	const bool suppress_lateral_fallback = (_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF)
+					       && gpsless_tube_launch_active();
+
+	if (!gps_fallback_enabled() || suppress_lateral_fallback || !_control_mode.flag_armed) {
 		_gps_fallback_was_bad = false;
 		return;
 	}
