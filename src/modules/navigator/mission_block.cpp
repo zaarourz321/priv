@@ -58,7 +58,32 @@ using matrix::wrap_pi;
 MissionBlock::MissionBlock(Navigator *navigator) :
 	NavigatorMode(navigator)
 {
+	_param_fw_gpsl_tko_alt = param_find("FW_GPSL_TKO_ALT");
+}
 
+bool
+MissionBlock::gpsless_tube_takeoff_reached()
+{
+	_gpsless_takeoff_status_sub.update();
+	const gpsless_takeoff_status_s &status = _gpsless_takeoff_status_sub.get();
+
+	// Only the dedicated fixed-wing tube-launch path may complete a TAKEOFF
+	// item this way. A stale or incomplete status must never advance a mission.
+	if (!status.enabled || !status.active || (status.state != gpsless_takeoff_status_s::STATE_TAKEOFF)
+	    || (status.timestamp == 0) || (hrt_elapsed_time(&status.timestamp) > 1_s)
+	    || !PX4_ISFINITE(status.baro_altitude) || !PX4_ISFINITE(status.launch_baro_altitude)) {
+		return false;
+	}
+
+	float tube_takeoff_height = NAN;
+
+	if ((_param_fw_gpsl_tko_alt == PARAM_INVALID)
+	    || (param_get(_param_fw_gpsl_tko_alt, &tube_takeoff_height) != PX4_OK)
+	    || !PX4_ISFINITE(tube_takeoff_height) || (tube_takeoff_height < 0.f)) {
+		return false;
+	}
+
+	return (status.baro_altitude - status.launch_baro_altitude) >= tube_takeoff_height;
 }
 
 bool
@@ -226,8 +251,12 @@ MissionBlock::is_mission_item_reached_or_completed()
 
 		} else if (_mission_item.nav_cmd == NAV_CMD_TAKEOFF
 			   && _navigator->get_vstatus()->vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING) {
-			/* fixed-wing takeoff is reached once the vehicle has exceeded the takeoff altitude */
-			if (_navigator->get_global_position()->alt > mission_item_altitude_amsl) {
+			// In normal flight, a fixed-wing takeoff is reached once the global
+			// estimator altitude exceeds the mission altitude. GPS-less tube launch
+			// has no trustworthy global altitude in the tube, so use the exact same
+			// barometric launch reference and FW_GPSL_TKO_ALT used by TECS.
+			if (gpsless_tube_takeoff_reached()
+		    || (_navigator->get_global_position()->alt > mission_item_altitude_amsl)) {
 				_waypoint_position_reached = true;
 			}
 

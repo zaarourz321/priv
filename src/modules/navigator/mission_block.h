@@ -45,8 +45,11 @@
 #include "navigation.h"
 
 #include <drivers/drv_hrt.h>
+#include <parameters/param.h>
 #include <systemlib/mavlink_log.h>
 #include <uORB/Publication.hpp>
+#include <uORB/Subscription.hpp>
+#include <uORB/topics/gpsless_takeoff_status.h>
 #include <uORB/topics/mission.h>
 #include <uORB/topics/position_setpoint_triplet.h>
 #include <uORB/topics/vehicle_command.h>
@@ -136,6 +139,12 @@ protected:
 	bool is_mission_item_reached_or_completed();
 
 	/**
+	 * Complete a fixed-wing tube-launch TAKEOFF item using the barometric
+	 * launch reference published by the fixed-wing position controller.
+	 */
+	bool gpsless_tube_takeoff_reached();
+
+	/**
 	 * Reset all reached flags
 	 */
 	void reset_mission_item_reached();
@@ -202,6 +211,9 @@ protected:
 	float get_absolute_altitude_for_item(const mission_item_s &mission_item) const;
 
 	mission_item_s _mission_item{}; // Current mission item that is being executed
+
+	uORB::SubscriptionData<gpsless_takeoff_status_s> _gpsless_takeoff_status_sub{ORB_ID(gpsless_takeoff_status)};
+	param_t _param_fw_gpsl_tko_alt{PARAM_INVALID};
 
 	bool _waypoint_position_reached{false};
 	bool _waypoint_yaw_reached{false};
