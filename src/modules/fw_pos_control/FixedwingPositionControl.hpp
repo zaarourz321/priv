@@ -743,6 +743,7 @@ private:
 	void update_gpsless_tube_launch_reference(const hrt_abstime now);
 	bool gpsless_tube_launch_estimator_healthy() const;
 	void reset_gpsless_tube_launch_state();
+	bool apply_gpsless_tube_launch_lateral();
 	bool gps_fallback_enabled() const;
 	void update_gps_fallback(const hrt_abstime now);
 	void apply_gps_fallback_lateral();
