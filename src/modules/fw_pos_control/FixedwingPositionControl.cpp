@@ -569,7 +569,9 @@ FixedwingPositionControl::gpsless_takeoff_status_publish(const hrt_abstime now)
 	}
 
 	status.global_altitude = _current_altitude;
-	status.baro_altitude = baro_valid ? _baro_altitude : NAN;
+	// Keep the last received finite value visible for diagnosis even if it is
+	// stale. baro_valid tells consumers whether it is safe to use for control.
+	status.baro_altitude = _baro_altitude;
 	status.used_altitude = takeoff_altitude_for_tecs();
 	status.hold_altitude_setpoint = _gpsless_tube_launch_post_takeoff_altitude;
 	status.launch_baro_altitude = _gpsless_tube_launch_baro_reference_valid ? _gpsless_tube_launch_baro_reference : NAN;
@@ -2362,7 +2364,10 @@ FixedwingPositionControl::Run()
 			_air_density = PX4_ISFINITE(air_data.rho) ? air_data.rho : _air_density;
 
 			if (PX4_ISFINITE(air_data.baro_alt_meter)) {
-				const hrt_abstime timestamp = (air_data.timestamp != 0) ? air_data.timestamp : hrt_absolute_time();
+				// This timestamp represents when this controller received a fresh
+				// vehicle_air_data update. Do not use the publisher timestamp here:
+				// some HIL sources leave it stale while publishing valid baro data.
+				const hrt_abstime timestamp = hrt_absolute_time();
 
 				if (PX4_ISFINITE(_baro_altitude_previous) && (timestamp > _baro_altitude_previous_timestamp)) {
 					const float dt = (timestamp - _baro_altitude_previous_timestamp) * 1e-6f;
