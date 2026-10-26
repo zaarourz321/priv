@@ -573,6 +573,9 @@ private:
 		_param_ekf2_req_hdrift,	///< maximum acceptable horizontal drift speed (m/s)
 		(ParamExtFloat<px4::params::EKF2_REQ_VDRIFT>) _param_ekf2_req_vdrift,	///< maximum acceptable vertical drift speed (m/s)
 
+		(ParamFloat<px4::params::FW_GPSFB_EPH>) _param_fw_gpsfb_eph,
+		(ParamFloat<px4::params::FW_GPSFB_EPV>) _param_fw_gpsfb_epv,
+
 		// measurement source control
 		(ParamInt<px4::params::EKF2_AID_MASK>)
 		_param_ekf2_aid_mask,		///< bitmasked integer that selects which of the GPS and optical flow aiding sources will be used

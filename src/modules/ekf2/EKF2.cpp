@@ -2243,6 +2243,12 @@ void EKF2::UpdateGpsSample(ekf2_timestamps_s &ekf2_timestamps)
 			perf_count(_msg_missed_gps_perf);
 		}
 
+		if (!PX4_ISFINITE(vehicle_gps_position.eph) || !PX4_ISFINITE(vehicle_gps_position.epv)
+		    || (vehicle_gps_position.eph > _param_fw_gpsfb_eph.get())
+		    || (vehicle_gps_position.epv > _param_fw_gpsfb_epv.get())) {
+			return;
+		}
+
 		gpsMessage gps_msg{
 			.time_usec = vehicle_gps_position.timestamp,
 			.lat = vehicle_gps_position.lat,
