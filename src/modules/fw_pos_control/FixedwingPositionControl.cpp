@@ -3150,11 +3150,19 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 	float max_sinkrate = desired_max_sinkrate;
 
 	if (_post_takeoff_climb_protection_active) {
+		const float current_altitude = takeoff_altitude_for_tecs();
+		constexpr float post_takeoff_target_reached_margin = 1.f;
+
 		if (!PX4_ISFINITE(_takeoff_completion_altitude)
 		    || !PX4_ISFINITE(_post_takeoff_target_altitude)
 		    || !PX4_ISFINITE(alt_sp)
+		    || !PX4_ISFINITE(current_altitude)
 		    || (alt_sp < _takeoff_completion_altitude)
-		    || (fabsf(alt_sp - _post_takeoff_target_altitude) > FLT_EPSILON)) {
+		    || (fabsf(alt_sp - _post_takeoff_target_altitude) > FLT_EPSILON)
+		    // This guard is only for the handoff from TAKEOFF to the first
+		    // mission altitude. Keeping it active after that altitude is reached
+		    // prohibits TECS from arresting an overshoot and causes a slow climb.
+		    || (current_altitude >= (_post_takeoff_target_altitude - post_takeoff_target_reached_margin))) {
 			_post_takeoff_climb_protection_active = false;
 
 		} else {
