@@ -2911,8 +2911,33 @@ FixedwingPositionControl::update_gpsless_tube_launch_reference(const hrt_abstime
 		_gpsless_tube_launch_gps_recovered = false;
 	}
 
-	if (!_gpsless_tube_launch_baro_altitude_active || !_gpsless_tube_launch_started
-	    || (_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF)) {
+	if (!_gpsless_tube_launch_started || (_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF)) {
+		return;
+	}
+
+	if (_gpsless_tube_launch_takeoff_complete_time == 0) {
+		// Mark the mission-item transition before evaluating GPS recovery. A
+		// valid sample received before this point may simply be the last sample
+		// that made it through the tube and must not release lateral control.
+		_gpsless_tube_launch_takeoff_complete_time = now;
+		_gpsless_tube_launch_estimator_healthy_since = 0;
+	}
+
+	// Lateral navigation and vertical altitude-source handover are separate.
+	// Resume the mission laterally as soon as a fresh, quality-checked raw GPS
+	// sample arrives after leaving the tube. The barometric altitude source is
+	// retained below until its independent convergence checks complete.
+	const bool fresh_gps_after_takeoff = !_gps_fallback_gps_bad
+					    && (_sensor_gps.timestamp > _gpsless_tube_launch_takeoff_complete_time)
+					    && (_vehicle_gps_position.timestamp > _gpsless_tube_launch_takeoff_complete_time);
+
+	if (fresh_gps_after_takeoff) {
+		_gpsless_tube_launch_gps_recovered = true;
+	}
+
+	// GPS recovery must continue to be evaluated even after a disabled or
+	// completed barometric handover. The remaining logic below is altitude-only.
+	if (!_gpsless_tube_launch_baro_altitude_active) {
 		return;
 	}
 
@@ -2939,18 +2964,14 @@ FixedwingPositionControl::update_gpsless_tube_launch_reference(const hrt_abstime
 		return;
 	}
 
-	if (_gpsless_tube_launch_takeoff_complete_time == 0) {
-		_gpsless_tube_launch_takeoff_complete_time = now;
-		_gpsless_tube_launch_estimator_healthy_since = 0;
+	if (PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
+	    && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)
+	    && !PX4_ISFINITE(_gpsless_tube_launch_post_takeoff_altitude)) {
+		_gpsless_tube_launch_post_takeoff_altitude = _baro_altitude;
 
-		if (PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
-		    && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)) {
-			_gpsless_tube_launch_post_takeoff_altitude = _baro_altitude;
-
-			// Switch TECS from the tube-relative frame to the QNH/AMSL baro frame
-			// without retaining the old relative-height state.
-			_tecs.handle_alt_step(_baro_altitude, _baro_altitude_rate);
-		}
+		// Switch TECS from the tube-relative frame to the QNH/AMSL baro frame
+		// without retaining the old relative-height state.
+		_tecs.handle_alt_step(_baro_altitude, _baro_altitude_rate);
 	}
 
 	const bool estimator_healthy = gpsless_tube_launch_estimator_healthy() && PX4_ISFINITE(_baro_altitude)
@@ -2975,9 +2996,8 @@ FixedwingPositionControl::update_gpsless_tube_launch_reference(const hrt_abstime
 	    && (now - _gpsless_tube_launch_estimator_healthy_since >= healthy_time)) {
 		_gpsless_tube_launch_baro_altitude_active = false;
 		_gpsless_tube_launch_estimator_healthy_since = 0;
-		// The same qualified recovery event that returns altitude control to
-		// the estimator also releases the fixed tube-launch heading.
-		_gpsless_tube_launch_gps_recovered = true;
+		// This affects the altitude source only. Lateral mission navigation may
+		// already have resumed after the first fresh GPS sample above.
 		_tecs.handle_alt_step(_current_altitude, -_local_pos.vz);
 	}
 }

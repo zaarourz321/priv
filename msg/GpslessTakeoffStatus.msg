@@ -11,7 +11,7 @@ bool gps_healthy                          # fused global position meets all conf
 bool altitude_converged                  # estimator and barometer are within FW_GPSL_ALT_ERR
 bool handover_ready                      # all time, health, and convergence conditions are met
 bool predefined_heading_active            # FW_GPSFB_TK_HDG is controlling roll after tube takeoff
-bool gps_recovered                        # qualified GPS/estimator and altitude handover completed after tube takeoff
+bool gps_recovered                        # fresh quality-checked GPS sample received after tube takeoff; lateral mission control released
 
 uint8 state
 uint8 STATE_DISABLED = 0
