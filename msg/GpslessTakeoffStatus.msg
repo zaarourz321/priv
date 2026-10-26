@@ -10,7 +10,8 @@ bool baro_valid                          # fresh finite barometric altitude is a
 bool gps_healthy                          # fused global position meets all configured handover quality checks
 bool altitude_converged                  # estimator and barometer are within FW_GPSL_ALT_ERR
 bool handover_ready                      # all time, health, and convergence conditions are met
-bool predefined_heading_active            # FW_GPSFB_TK_HDG is controlling roll after tube takeoff
+bool yaw_hold_active                      # captured-yaw controller is controlling roll after tube takeoff
+bool loiter_active                        # blind loiter controller is controlling roll after tube takeoff
 bool gps_recovered                        # fresh quality-checked GPS sample received after tube takeoff; lateral mission control released
 
 uint8 state
@@ -26,6 +27,9 @@ float32 used_altitude                    # altitude currently passed to TECS [m]
 float32 hold_altitude_setpoint            # barometric altitude captured at AUTO takeoff handover [m]
 float32 launch_baro_altitude             # barometric altitude captured in launch tube [m]
 float32 altitude_difference              # absolute global/barometric altitude difference [m]
+float32 held_yaw                         # captured post-launch yaw [rad]
+float32 yaw_error                        # captured-yaw error [rad]
+float32 roll_setpoint                    # GPS-less lateral roll setpoint [rad]
 
 float32 global_eph                       # fused global horizontal uncertainty [m]
 float32 global_epv                       # fused global vertical uncertainty [m]

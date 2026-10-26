@@ -293,7 +293,6 @@ private:
 	bool _gps_fallback_was_bad{false};
 	bool _gps_fallback_yaw_hold_active{false};
 	bool _gps_fallback_loiter_active{false};
-	bool _gps_fallback_takeoff_heading_active{false};
 	float _gps_fallback_yaw_error{NAN};
 	float _gps_fallback_roll_setpoint{NAN};
 
@@ -373,6 +372,11 @@ private:
 	float _gpsless_tube_launch_post_takeoff_altitude{NAN};
 	hrt_abstime _gpsless_tube_launch_takeoff_complete_time{0};
 	hrt_abstime _gpsless_tube_launch_estimator_healthy_since{0};
+	float _gpsless_tube_launch_yaw_hold_ref{NAN};
+	bool _gpsless_tube_launch_yaw_hold_active{false};
+	bool _gpsless_tube_launch_loiter_active{false};
+	float _gpsless_tube_launch_yaw_error{NAN};
+	float _gpsless_tube_launch_roll_setpoint{NAN};
 
 	// class handling runway takeoff for fixed-wing UAVs with steerable wheels
 	RunwayTakeoff _runway_takeoff;
@@ -1074,6 +1078,12 @@ private:
 		(ParamFloat<px4::params::FW_GPSL_GPS_EPH>) _param_fw_gpsl_gps_eph,
 		(ParamFloat<px4::params::FW_GPSL_GPS_EPV>) _param_fw_gpsl_gps_epv,
 		(ParamFloat<px4::params::FW_GPSL_ALT_ERR>) _param_fw_gpsl_alt_err,
+		(ParamBool<px4::params::FW_GPSL_YH_EN>) _param_fw_gpsl_yh_en,
+		(ParamFloat<px4::params::FW_GPSL_YH_P>) _param_fw_gpsl_yh_p,
+		(ParamFloat<px4::params::FW_GPSL_YH_D>) _param_fw_gpsl_yh_d,
+		(ParamFloat<px4::params::FW_GPSL_MAX_R>) _param_fw_gpsl_max_r,
+		(ParamBool<px4::params::FW_GPSL_LTR_EN>) _param_fw_gpsl_ltr_en,
+		(ParamFloat<px4::params::FW_GPSL_LTR_RAD>) _param_fw_gpsl_ltr_rad,
 
 		(ParamBool<px4::params::FW_GPSFB_EN>) _param_fw_gpsfb_en,
 		(ParamFloat<px4::params::FW_GPSFB_EPH>) _param_fw_gpsfb_eph,
@@ -1084,11 +1094,7 @@ private:
 		(ParamFloat<px4::params::FW_GPSFB_YH_D>) _param_fw_gpsfb_yh_d,
 		(ParamFloat<px4::params::FW_GPSFB_MAX_R>) _param_fw_gpsfb_max_r,
 		(ParamBool<px4::params::FW_GPSFB_LTR_EN>) _param_fw_gpsfb_ltr_en,
-		(ParamFloat<px4::params::FW_GPSFB_LTR_RAD>) _param_fw_gpsfb_ltr_rad,
-		(ParamBool<px4::params::FW_GPSFB_TK_EN>) _param_fw_gpsfb_tk_en,
-		(ParamFloat<px4::params::FW_GPSFB_TK_HDG>) _param_fw_gpsfb_tk_hdg,
-		(ParamFloat<px4::params::FW_GPSFB_TK_P>) _param_fw_gpsfb_tk_p,
-		(ParamFloat<px4::params::FW_GPSFB_TK_D>) _param_fw_gpsfb_tk_d
+		(ParamFloat<px4::params::FW_GPSFB_LTR_RAD>) _param_fw_gpsfb_ltr_rad
 	)
 
 };

@@ -18,7 +18,6 @@ uint8 ALTITUDE_SOURCE_BARO = 1
 
 bool yaw_hold_active
 bool loiter_active
-bool takeoff_heading_active
 
 float32 raw_gps_eph
 float32 raw_gps_epv

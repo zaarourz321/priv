@@ -1101,7 +1101,7 @@ PARAM_DEFINE_FLOAT(FW_GPSL_HOLD_T, 10.0f);
 PARAM_DEFINE_FLOAT(FW_GPSL_GPS_T, 5.0f);
 
 /**
- * Maximum global estimator horizontal uncertainty for barometer handover
+ * Maximum GPS and global-estimator horizontal uncertainty for recovery
  *
  * @unit m
  * @min 0.1
@@ -1113,7 +1113,7 @@ PARAM_DEFINE_FLOAT(FW_GPSL_GPS_T, 5.0f);
 PARAM_DEFINE_FLOAT(FW_GPSL_GPS_EPH, 2.0f);
 
 /**
- * Maximum global estimator vertical uncertainty for barometer handover
+ * Maximum GPS and global-estimator vertical uncertainty for recovery
  *
  * @unit m
  * @min 0.1
@@ -1135,6 +1135,77 @@ PARAM_DEFINE_FLOAT(FW_GPSL_GPS_EPV, 3.0f);
  * @group FW GPS-less Launch
  */
 PARAM_DEFINE_FLOAT(FW_GPSL_ALT_ERR, 5.0f);
+
+/**
+ * Enable GPS-less post-launch yaw hold
+ *
+ * Captures the aircraft yaw when the barometric tube takeoff completes and
+ * holds it while GPS remains unavailable. A GPS-less blind loiter, when
+ * enabled, takes priority.
+ *
+ * @boolean
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_INT32(FW_GPSL_YH_EN, 1);
+
+/**
+ * GPS-less post-launch yaw-hold proportional gain
+ *
+ * Maps captured-yaw error in radians to roll setpoint in radians.
+ *
+ * @min 0.0
+ * @max 5.0
+ * @decimal 3
+ * @increment 0.025
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_YH_P, 0.25f);
+
+/**
+ * GPS-less post-launch yaw-hold yaw-rate damping gain
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_YH_D, 0.005f);
+
+/**
+ * GPS-less post-launch maximum roll setpoint
+ *
+ * @unit deg
+ * @min 1.0
+ * @max 60.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_MAX_R, 30.0f);
+
+/**
+ * Enable GPS-less post-launch blind loiter
+ *
+ * Commands a constant-radius open-loop loiter after tube takeoff while GPS
+ * remains unavailable. It takes priority over GPS-less yaw hold.
+ *
+ * @boolean
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_INT32(FW_GPSL_LTR_EN, 0);
+
+/**
+ * GPS-less post-launch blind loiter radius
+ *
+ * @unit m
+ * @min 10.0
+ * @max 10000.0
+ * @decimal 1
+ * @increment 10.0
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_LTR_RAD, 150.0f);
 
 /**
  * Enable fixed-wing GPS fallback
@@ -1265,56 +1336,6 @@ PARAM_DEFINE_INT32(FW_GPSFB_LTR_EN, 0);
  * @group FW GPS Fallback
  */
 PARAM_DEFINE_FLOAT(FW_GPSFB_LTR_RAD, 150.0f);
-
-/**
- * Enable GPS-less post-launch predefined heading
- *
- * When GPS has not recovered after a GPS-less tube launch, commands roll to
- * hold FW_GPSFB_TK_HDG. A configured FW_GPSFB_LTR_EN loiter takes priority.
- *
- * @boolean
- * @group FW GPS Fallback
- */
-PARAM_DEFINE_INT32(FW_GPSFB_TK_EN, 1);
-
-/**
- * GPS-less post-launch heading
- *
- * Fixed heading used after a GPS-less tube takeoff until fresh GPS reception
- * resumes, unless GPS-loss loiter is enabled.
- *
- * @unit deg
- * @min -180.0
- * @max 180.0
- * @decimal 1
- * @increment 1.0
- * @group FW GPS Fallback
- */
-PARAM_DEFINE_FLOAT(FW_GPSFB_TK_HDG, 0.0f);
-
-/**
- * GPS-loss takeoff heading proportional gain
- *
- * Maps takeoff heading error in radians to roll setpoint in radians.
- *
- * @min 0.0
- * @max 5.0
- * @decimal 3
- * @increment 0.025
- * @group FW GPS Fallback
- */
-PARAM_DEFINE_FLOAT(FW_GPSFB_TK_P, 0.5f);
-
-/**
- * GPS-loss takeoff heading yaw-rate damping gain
- *
- * @min 0.0
- * @max 2.0
- * @decimal 3
- * @increment 0.005
- * @group FW GPS Fallback
- */
-PARAM_DEFINE_FLOAT(FW_GPSFB_TK_D, 0.1f);
 
 /**
  * Flaps setting during take-off
