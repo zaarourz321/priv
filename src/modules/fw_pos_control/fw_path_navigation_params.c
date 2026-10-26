@@ -1011,6 +1011,114 @@ PARAM_DEFINE_FLOAT(FW_WIND_ARSP_SC, 0.f);
 PARAM_DEFINE_INT32(FW_LAUN_DETCN_ON, 0);
 
 /**
+ * Enable GPS-less tube launch
+ *
+ * Uses the normal fixed-wing acceleration launch detector. While AUTO takeoff
+ * is active, TECS uses barometric height and barometric climb rate relative to
+ * the launch tube. Lateral line navigation is bypassed and roll is held at
+ * zero, so the takeoff controller does not require a valid GNSS position.
+ * Requires FW_LAUN_DETCN_ON to be enabled. Not compatible with runway takeoff.
+ *
+ * @boolean
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_INT32(FW_GPSL_TKO_EN, 0);
+
+/**
+ * GPS-less tube launch climb altitude
+ *
+ * Barometric altitude above the launch tube commanded to TECS during the AUTO
+ * takeoff phase. This is a relative height, not an AMSL mission altitude.
+ *
+ * @unit m
+ * @min 5.0
+ * @max 500.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_TKO_ALT, 30.0f);
+
+/**
+ * Keep barometric altitude after GPS-less takeoff
+ *
+ * When enabled, barometric altitude remains the TECS measurement after the
+ * takeoff mission item completes. It returns to the estimator only after the
+ * configured hold and convergence checks pass. Disable to return to the
+ * normal estimator altitude as soon as AUTO takeoff ends.
+ *
+ * @boolean
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_INT32(FW_GPSL_POST_EN, 1);
+
+/**
+ * Minimum post-takeoff barometric altitude hold time
+ *
+ * The estimator cannot be selected before this duration has elapsed after the
+ * AUTO takeoff mission item completes.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 120.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_HOLD_T, 10.0f);
+
+/**
+ * Required continuous healthy estimator time
+ *
+ * The global estimator must remain healthy for this duration before the
+ * post-takeoff barometric altitude hold may end.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 60.0
+ * @decimal 1
+ * @increment 0.5
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_GPS_T, 5.0f);
+
+/**
+ * Maximum global estimator horizontal uncertainty for barometer handover
+ *
+ * @unit m
+ * @min 0.1
+ * @max 50.0
+ * @decimal 1
+ * @increment 0.1
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_GPS_EPH, 2.0f);
+
+/**
+ * Maximum global estimator vertical uncertainty for barometer handover
+ *
+ * @unit m
+ * @min 0.1
+ * @max 50.0
+ * @decimal 1
+ * @increment 0.1
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_GPS_EPV, 3.0f);
+
+/**
+ * Maximum estimator and barometric altitude difference for handover
+ *
+ * @unit m
+ * @min 0.1
+ * @max 100.0
+ * @decimal 1
+ * @increment 0.1
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_ALT_ERR, 5.0f);
+
+/**
  * Flaps setting during take-off
  *
  * Sets a fraction of full flaps during take-off.

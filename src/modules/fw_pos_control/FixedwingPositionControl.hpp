@@ -222,6 +222,7 @@ private:
 	vehicle_attitude_setpoint_s _att_sp{};
 	vehicle_control_mode_s _control_mode{};
 	vehicle_local_position_s _local_pos{};
+	vehicle_global_position_s _global_position{};
 	vehicle_status_s _vehicle_status{};
 
 	bool _position_setpoint_previous_valid{false};
@@ -257,6 +258,11 @@ private:
 	double _current_latitude{0};
 	double _current_longitude{0};
 	float _current_altitude{0.f};
+	float _baro_altitude{NAN};
+	float _baro_altitude_rate{0.f};
+	float _baro_altitude_previous{NAN};
+	hrt_abstime _baro_altitude_timestamp{0};
+	hrt_abstime _baro_altitude_previous_timestamp{0};
 
 	float _pitch{0.0f};
 	float _yaw{0.0f};
@@ -315,6 +321,16 @@ private:
 
 	// [rad] current vehicle yaw at the time the launch is detected
 	float _launch_current_yaw{0.f};
+
+	// GPS-less tube launch uses barometric height relative to the launch tube
+	// only while AUTO takeoff is active. Do not replace _current_altitude: that
+	// value remains in the estimator/navigation frame for the rest of PX4.
+	bool _gpsless_tube_launch_baro_reference_valid{false};
+	float _gpsless_tube_launch_baro_reference{NAN};
+	bool _gpsless_tube_launch_baro_altitude_active{false};
+	bool _gpsless_tube_launch_started{false};
+	hrt_abstime _gpsless_tube_launch_takeoff_complete_time{0};
+	hrt_abstime _gpsless_tube_launch_estimator_healthy_since{0};
 
 	// class handling runway takeoff for fixed-wing UAVs with steerable wheels
 	RunwayTakeoff _runway_takeoff;
@@ -679,6 +695,14 @@ private:
 	void reset_takeoff_state();
 	void reset_landing_state();
 
+	bool gpsless_tube_launch_enabled() const;
+	bool gpsless_tube_launch_active();
+	float takeoff_altitude_for_tecs() const;
+	float takeoff_altitude_rate_for_tecs() const;
+	void update_gpsless_tube_launch_reference(const hrt_abstime now);
+	bool gpsless_tube_launch_estimator_healthy() const;
+	void reset_gpsless_tube_launch_state();
+
 	/**
 	 * @brief Decides which control mode to execute.
 	 *
@@ -991,7 +1015,15 @@ private:
 		(ParamFloat<px4::params::FW_TKO_AIRSPD>) _param_fw_tko_airspd,
 
 		(ParamFloat<px4::params::RWTO_PSP>) _param_rwto_psp,
-		(ParamBool<px4::params::FW_LAUN_DETCN_ON>) _param_fw_laun_detcn_on
+		(ParamBool<px4::params::FW_LAUN_DETCN_ON>) _param_fw_laun_detcn_on,
+		(ParamBool<px4::params::FW_GPSL_TKO_EN>) _param_fw_gpsl_tko_en,
+		(ParamFloat<px4::params::FW_GPSL_TKO_ALT>) _param_fw_gpsl_tko_alt,
+		(ParamBool<px4::params::FW_GPSL_POST_EN>) _param_fw_gpsl_post_en,
+		(ParamFloat<px4::params::FW_GPSL_HOLD_T>) _param_fw_gpsl_hold_t,
+		(ParamFloat<px4::params::FW_GPSL_GPS_T>) _param_fw_gpsl_gps_t,
+		(ParamFloat<px4::params::FW_GPSL_GPS_EPH>) _param_fw_gpsl_gps_eph,
+		(ParamFloat<px4::params::FW_GPSL_GPS_EPV>) _param_fw_gpsl_gps_epv,
+		(ParamFloat<px4::params::FW_GPSL_ALT_ERR>) _param_fw_gpsl_alt_err
 	)
 
 };

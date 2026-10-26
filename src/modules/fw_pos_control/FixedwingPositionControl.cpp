@@ -835,7 +835,7 @@ FixedwingPositionControl::update_in_air_states(const hrt_abstime now)
 		_was_in_air = true;
 		_time_went_in_air = now;
 
-		_tecs.initialize(_current_altitude, -_local_pos.vz, _airspeed, _eas2tas);
+		_tecs.initialize(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs(), _airspeed, _eas2tas);
 	}
 
 	/* reset flag when airplane landed */
@@ -843,7 +843,7 @@ FixedwingPositionControl::update_in_air_states(const hrt_abstime now)
 		_was_in_air = false;
 		_completed_manual_takeoff = false;
 
-		_tecs.initialize(_current_altitude, -_local_pos.vz, _airspeed, _eas2tas);
+		_tecs.initialize(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs(), _airspeed, _eas2tas);
 	}
 }
 
@@ -1295,13 +1295,14 @@ FixedwingPositionControl::control_auto_takeoff(const hrt_abstime &now, const flo
 		reset_takeoff_state();
 	}
 
-	// for now taking current position setpoint altitude as clearance altitude. this is the altitude we need to
-	// clear all occlusions in the takeoff path
-	const float clearance_altitude_amsl = pos_sp_curr.alt;
+	const bool gpsless_tube_launch = gpsless_tube_launch_active();
 
-	// set the altitude to something above the clearance altitude to ensure the vehicle climbs past the value
-	// (navigator will accept the takeoff as complete once crossing the clearance altitude)
-	const float altitude_setpoint_amsl = clearance_altitude_amsl + kClearanceAltitudeBuffer;
+	// In a GPS-less tube launch both the TECS state and its altitude target are
+	// relative to the barometric altitude captured in the tube. In the normal
+	// path they remain AMSL values from Navigator.
+	const float clearance_altitude_amsl = gpsless_tube_launch ? _param_fw_gpsl_tko_alt.get() : pos_sp_curr.alt;
+	const float altitude_setpoint_amsl = gpsless_tube_launch ? clearance_altitude_amsl :
+							  clearance_altitude_amsl + kClearanceAltitudeBuffer;
 
 	Vector2f local_2D_position{_local_pos.x, _local_pos.y};
 
@@ -1435,25 +1436,30 @@ FixedwingPositionControl::control_auto_takeoff(const hrt_abstime &now, const flo
 		if (!_launch_detected && _launchDetector.getLaunchDetected() > launch_detection_status_s::STATE_WAITING_FOR_LAUNCH
 		    && _param_fw_laun_detcn_on.get()) {
 			_launch_detected = true;
-			_launch_global_position = global_position;
-			_takeoff_ground_alt = _current_altitude;
+
+			if (!gpsless_tube_launch) {
+				_launch_global_position = global_position;
+			}
+
+			_takeoff_ground_alt = gpsless_tube_launch ? 0.f : _current_altitude;
 			_launch_current_yaw = _yaw;
 			_airspeed_slew_rate_controller.setForcedValue(takeoff_airspeed);
 		}
 
-		const Vector2f launch_local_position = _global_local_proj_ref.project(_launch_global_position(0),
-						       _launch_global_position(1));
-		const Vector2f takeoff_waypoint_local = _global_local_proj_ref.project(pos_sp_curr.lat, pos_sp_curr.lon);
-
-		// by default set the takeoff bearing to the takeoff yaw, but override in a mission takeoff with bearing to takeoff WP
+		Vector2f launch_local_position{};
 		float takeoff_bearing = _launch_current_yaw;
 
-		if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
-			// the bearing from launch to the takeoff waypoint is followed until the clearance altitude is exceeded
-			const Vector2f takeoff_bearing_vector = takeoff_waypoint_local - launch_local_position;
+		if (!gpsless_tube_launch) {
+			launch_local_position = _global_local_proj_ref.project(_launch_global_position(0), _launch_global_position(1));
+			const Vector2f takeoff_waypoint_local = _global_local_proj_ref.project(pos_sp_curr.lat, pos_sp_curr.lon);
 
-			if (takeoff_bearing_vector.norm() > FLT_EPSILON) {
-				takeoff_bearing = atan2f(takeoff_bearing_vector(1), takeoff_bearing_vector(0));
+			// By default follow the launch heading, but in a mission follow the bearing to the takeoff waypoint.
+			if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
+				const Vector2f takeoff_bearing_vector = takeoff_waypoint_local - launch_local_position;
+
+				if (takeoff_bearing_vector.norm() > FLT_EPSILON) {
+					takeoff_bearing = atan2f(takeoff_bearing_vector(1), takeoff_bearing_vector(0));
+				}
 			}
 		}
 
@@ -1462,14 +1468,21 @@ FixedwingPositionControl::control_auto_takeoff(const hrt_abstime &now, const flo
 		    && _param_fw_laun_detcn_on.get()) {
 			/* Launch has been detected, hence we have to control the plane. */
 
-			float target_airspeed = adapt_airspeed_setpoint(control_interval, takeoff_airspeed, adjusted_min_airspeed, ground_speed,
-						true);
+			const Vector2f no_ground_speed{};
+			float target_airspeed = adapt_airspeed_setpoint(control_interval, takeoff_airspeed, adjusted_min_airspeed,
+						 gpsless_tube_launch ? no_ground_speed : ground_speed, true);
 
-			_npfg.setAirspeedNom(target_airspeed * _eas2tas);
-			_npfg.setAirspeedMax(_param_fw_airspd_max.get() * _eas2tas);
-			navigateLine(launch_local_position, takeoff_bearing, local_2D_position, ground_speed, _wind_vel);
-			_att_sp.roll_body = _npfg.getRollSetpoint();
-			target_airspeed = _npfg.getAirspeedRef() / _eas2tas;
+			if (gpsless_tube_launch) {
+				// Do not use local/global position or lateral navigation inside the launch tube.
+				_att_sp.roll_body = 0.f;
+
+			} else {
+				_npfg.setAirspeedNom(target_airspeed * _eas2tas);
+				_npfg.setAirspeedMax(_param_fw_airspd_max.get() * _eas2tas);
+				navigateLine(launch_local_position, takeoff_bearing, local_2D_position, ground_speed, _wind_vel);
+				_att_sp.roll_body = _npfg.getRollSetpoint();
+				target_airspeed = _npfg.getAirspeedRef() / _eas2tas;
+			}
 
 
 			const float max_takeoff_throttle = (_launchDetector.getLaunchDetected() < launch_detection_status_s::STATE_FLYING) ?
@@ -1494,7 +1507,7 @@ FixedwingPositionControl::control_auto_takeoff(const hrt_abstime &now, const flo
 			}
 
 			_att_sp.pitch_body = get_tecs_pitch();
-			_att_sp.yaw_body = _yaw; // yaw is not controlled, so set setpoint to current yaw
+			_att_sp.yaw_body = gpsless_tube_launch ? _launch_current_yaw : _yaw;
 
 		} else {
 			/* Tell the attitude controller to stop integrating while we are waiting for the launch */
@@ -1512,7 +1525,8 @@ FixedwingPositionControl::control_auto_takeoff(const hrt_abstime &now, const flo
 		_launch_detection_status_pub.publish(launch_detection_status);
 	}
 
-	_att_sp.roll_body = constrainRollNearGround(_att_sp.roll_body, _current_altitude, _takeoff_ground_alt);
+	_att_sp.roll_body = gpsless_tube_launch ? 0.f :
+			    constrainRollNearGround(_att_sp.roll_body, _current_altitude, _takeoff_ground_alt);
 
 	if (!_vehicle_status.in_transition_to_fw) {
 		publishLocalPositionSetpoint(pos_sp_curr);
@@ -2144,8 +2158,9 @@ FixedwingPositionControl::Run()
 		vehicle_global_position_s gpos;
 
 		if (_global_pos_sub.update(&gpos)) {
-			_current_latitude = gpos.lat;
-			_current_longitude = gpos.lon;
+			_global_position = gpos;
+			_current_latitude = _global_position.lat;
+			_current_longitude = _global_position.lon;
 		}
 
 		if (_local_pos.z_global && PX4_ISFINITE(_local_pos.ref_alt)) {
@@ -2281,6 +2296,25 @@ FixedwingPositionControl::Run()
 
 		if (_vehicle_air_data_sub.update(&air_data)) {
 			_air_density = PX4_ISFINITE(air_data.rho) ? air_data.rho : _air_density;
+
+			if (PX4_ISFINITE(air_data.baro_alt_meter)) {
+				const hrt_abstime timestamp = (air_data.timestamp != 0) ? air_data.timestamp : hrt_absolute_time();
+
+				if (PX4_ISFINITE(_baro_altitude_previous) && (timestamp > _baro_altitude_previous_timestamp)) {
+					const float dt = (timestamp - _baro_altitude_previous_timestamp) * 1e-6f;
+
+					if ((dt > 0.01f) && (dt < 1.f)) {
+						const float raw_rate = constrain((air_data.baro_alt_meter - _baro_altitude_previous) / dt, -20.f, 20.f);
+						const float alpha = constrain(dt / (0.5f + dt), 0.02f, 0.5f);
+						_baro_altitude_rate += alpha * (raw_rate - _baro_altitude_rate);
+					}
+				}
+
+				_baro_altitude = air_data.baro_alt_meter;
+				_baro_altitude_timestamp = timestamp;
+				_baro_altitude_previous = air_data.baro_alt_meter;
+				_baro_altitude_previous_timestamp = timestamp;
+			}
 		}
 
 		if (_vehicle_land_detected_sub.updated()) {
@@ -2297,6 +2331,7 @@ FixedwingPositionControl::Run()
 		Vector2f ground_speed(_local_pos.vx, _local_pos.vy);
 
 		set_control_mode_current(_local_pos.timestamp);
+		update_gpsless_tube_launch_reference(_local_pos.timestamp);
 
 		update_in_air_states(_local_pos.timestamp);
 
@@ -2380,7 +2415,7 @@ FixedwingPositionControl::Run()
 		case FW_POSCTRL_MODE_OTHER: {
 				_att_sp.thrust_body[0] = min(_att_sp.thrust_body[0], _param_fw_thr_max.get());
 
-				_tecs.initialize(_current_altitude, -_local_pos.vz, _airspeed, _eas2tas);
+				_tecs.initialize(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs(), _airspeed, _eas2tas);
 
 				break;
 			}
@@ -2455,6 +2490,146 @@ FixedwingPositionControl::reset_takeoff_state()
 	_launch_detected = false;
 
 	_takeoff_ground_alt = _current_altitude;
+}
+
+bool
+FixedwingPositionControl::gpsless_tube_launch_enabled() const
+{
+	return _param_fw_gpsl_tko_en.get() && _param_fw_laun_detcn_on.get();
+}
+
+bool
+FixedwingPositionControl::gpsless_tube_launch_active()
+{
+	return gpsless_tube_launch_enabled() && !_runway_takeoff.runwayTakeoffEnabled()
+	       && _gpsless_tube_launch_baro_altitude_active && PX4_ISFINITE(_baro_altitude)
+	       && (_baro_altitude_timestamp != 0) && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000);
+}
+
+float
+FixedwingPositionControl::takeoff_altitude_for_tecs() const
+{
+	if (gpsless_tube_launch_enabled() && _gpsless_tube_launch_baro_altitude_active
+	    && PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
+	    && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)) {
+		if (_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF) {
+			return _baro_altitude - _gpsless_tube_launch_baro_reference;
+		}
+
+		// After AUTO takeoff, normal Navigator setpoints are AMSL. Use the QNH
+		// referenced barometric altitude directly so state and setpoint share
+		// the same frame while waiting for estimator recovery.
+		return _baro_altitude;
+	}
+
+	return _current_altitude;
+}
+
+float
+FixedwingPositionControl::takeoff_altitude_rate_for_tecs() const
+{
+	if (gpsless_tube_launch_enabled() && _gpsless_tube_launch_baro_altitude_active
+	    && PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
+	    && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)) {
+		return _baro_altitude_rate;
+	}
+
+	return -_local_pos.vz;
+}
+
+void
+FixedwingPositionControl::reset_gpsless_tube_launch_state()
+{
+	_gpsless_tube_launch_baro_reference_valid = false;
+	_gpsless_tube_launch_baro_reference = NAN;
+	_gpsless_tube_launch_baro_altitude_active = false;
+	_gpsless_tube_launch_started = false;
+	_gpsless_tube_launch_takeoff_complete_time = 0;
+	_gpsless_tube_launch_estimator_healthy_since = 0;
+}
+
+bool
+FixedwingPositionControl::gpsless_tube_launch_estimator_healthy() const
+{
+	return (_global_position.timestamp != 0) && (hrt_elapsed_time(&_global_position.timestamp) <= 1000000)
+	       && !_global_position.dead_reckoning && PX4_ISFINITE(_global_position.eph)
+	       && PX4_ISFINITE(_global_position.epv) && (_global_position.eph <= _param_fw_gpsl_gps_eph.get())
+	       && (_global_position.epv <= _param_fw_gpsl_gps_epv.get());
+}
+
+void
+FixedwingPositionControl::update_gpsless_tube_launch_reference(const hrt_abstime now)
+{
+	if (!gpsless_tube_launch_enabled() || !_control_mode.flag_armed || _runway_takeoff.runwayTakeoffEnabled()) {
+		reset_gpsless_tube_launch_state();
+		return;
+	}
+
+	if ((_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF) && !_gpsless_tube_launch_baro_reference_valid
+	    && PX4_ISFINITE(_baro_altitude)
+	    && (_baro_altitude_timestamp != 0) && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)) {
+		_gpsless_tube_launch_baro_reference = _baro_altitude;
+		_gpsless_tube_launch_baro_reference_valid = true;
+		_gpsless_tube_launch_baro_altitude_active = true;
+	}
+
+	if ((_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF) && !_gpsless_tube_launch_started) {
+		reset_gpsless_tube_launch_state();
+		return;
+	}
+
+	if ((_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF) && _launch_detected
+	    && _gpsless_tube_launch_baro_reference_valid && !_gpsless_tube_launch_started) {
+		_gpsless_tube_launch_started = true;
+	}
+
+	if (!_gpsless_tube_launch_baro_altitude_active || !_gpsless_tube_launch_started
+	    || (_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF)) {
+		return;
+	}
+
+	if (!_param_fw_gpsl_post_en.get()) {
+		_gpsless_tube_launch_baro_altitude_active = false;
+		_tecs.handle_alt_step(_current_altitude, -_local_pos.vz);
+		return;
+	}
+
+	if (_gpsless_tube_launch_takeoff_complete_time == 0) {
+		_gpsless_tube_launch_takeoff_complete_time = now;
+		_gpsless_tube_launch_estimator_healthy_since = 0;
+
+		if (PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
+		    && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)) {
+			// Switch TECS from the tube-relative frame to the QNH/AMSL baro frame
+			// without retaining the old relative-height state.
+			_tecs.handle_alt_step(_baro_altitude, _baro_altitude_rate);
+		}
+	}
+
+	const bool estimator_healthy = gpsless_tube_launch_estimator_healthy() && PX4_ISFINITE(_baro_altitude)
+				      && (_baro_altitude_timestamp != 0)
+				      && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)
+				      && (fabsf(_current_altitude - _baro_altitude) <= _param_fw_gpsl_alt_err.get());
+
+	if (estimator_healthy) {
+		if (_gpsless_tube_launch_estimator_healthy_since == 0) {
+			_gpsless_tube_launch_estimator_healthy_since = now;
+		}
+
+	} else {
+		_gpsless_tube_launch_estimator_healthy_since = 0;
+	}
+
+	const hrt_abstime hold_time = static_cast<hrt_abstime>(_param_fw_gpsl_hold_t.get() * 1e6f);
+	const hrt_abstime healthy_time = static_cast<hrt_abstime>(_param_fw_gpsl_gps_t.get() * 1e6f);
+
+	if ((now - _gpsless_tube_launch_takeoff_complete_time >= hold_time)
+	    && (_gpsless_tube_launch_estimator_healthy_since != 0)
+	    && (now - _gpsless_tube_launch_estimator_healthy_since >= healthy_time)) {
+		_gpsless_tube_launch_baro_altitude_active = false;
+		_gpsless_tube_launch_estimator_healthy_since = 0;
+		_tecs.handle_alt_step(_current_altitude, -_local_pos.vz);
+	}
 }
 
 void
@@ -2574,7 +2749,7 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 	}
 
 	if (_reinitialize_tecs) {
-		_tecs.initialize(_current_altitude, -_local_pos.vz, _airspeed, _eas2tas);
+		_tecs.initialize(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs(), _airspeed, _eas2tas);
 		_reinitialize_tecs = false;
 	}
 
@@ -2582,7 +2757,7 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 	_tecs.set_detect_underspeed_enabled(!disable_underspeed_detection);
 
 	if (_landed) {
-		_tecs.initialize(_current_altitude, -_local_pos.vz, _airspeed, _eas2tas);
+		_tecs.initialize(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs(), _airspeed, _eas2tas);
 	}
 
 	/* update TECS vehicle state estimates */
@@ -2594,7 +2769,7 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 	const float airspeed_rate_estimate = 0.f;
 
 	_tecs.update(_pitch - radians(_param_fw_psp_off.get()),
-		     _current_altitude,
+		     takeoff_altitude_for_tecs(),
 		     alt_sp,
 		     airspeed_sp,
 		     _airspeed,
@@ -2608,7 +2783,7 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 		     desired_max_climbrate,
 		     desired_max_sinkrate,
 		     airspeed_rate_estimate,
-		     -_local_pos.vz,
+		     takeoff_altitude_rate_for_tecs(),
 		     hgt_rate_sp);
 
 	tecs_status_publish(alt_sp, airspeed_sp, airspeed_rate_estimate, throttle_trim_adjusted);
