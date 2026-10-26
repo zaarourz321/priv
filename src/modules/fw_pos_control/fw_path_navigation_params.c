@@ -1137,21 +1137,33 @@ PARAM_DEFINE_FLOAT(FW_GPSL_GPS_EPV, 3.0f);
 PARAM_DEFINE_FLOAT(FW_GPSL_ALT_ERR, 5.0f);
 
 /**
- * Enable GPS-less post-launch yaw hold
+ * Enable GPS-less post-launch predefined heading
  *
- * Captures the aircraft yaw when the barometric tube takeoff completes and
- * holds it while GPS remains unavailable. A GPS-less blind loiter, when
+ * Commands the configured FW_GPSL_HDG while GPS remains unavailable after
+ * the barometric tube takeoff completes. A GPS-less blind loiter, when
  * enabled, takes priority.
  *
  * @boolean
  * @group FW GPS-less Launch
  */
-PARAM_DEFINE_INT32(FW_GPSL_YH_EN, 1);
+PARAM_DEFINE_INT32(FW_GPSL_HDG_EN, 1);
 
 /**
- * GPS-less post-launch yaw-hold proportional gain
+ * GPS-less post-launch predefined heading
  *
- * Maps captured-yaw error in radians to roll setpoint in radians.
+ * @unit deg
+ * @min -180.0
+ * @max 180.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_HDG, 0.0f);
+
+/**
+ * GPS-less post-launch heading proportional gain
+ *
+ * Maps configured-heading error in radians to roll setpoint in radians.
  *
  * @min 0.0
  * @max 5.0
@@ -1159,10 +1171,10 @@ PARAM_DEFINE_INT32(FW_GPSL_YH_EN, 1);
  * @increment 0.025
  * @group FW GPS-less Launch
  */
-PARAM_DEFINE_FLOAT(FW_GPSL_YH_P, 0.25f);
+PARAM_DEFINE_FLOAT(FW_GPSL_HDG_P, 0.5f);
 
 /**
- * GPS-less post-launch yaw-hold yaw-rate damping gain
+ * GPS-less post-launch heading yaw-rate damping gain
  *
  * @min 0.0
  * @max 2.0
@@ -1170,7 +1182,7 @@ PARAM_DEFINE_FLOAT(FW_GPSL_YH_P, 0.25f);
  * @increment 0.005
  * @group FW GPS-less Launch
  */
-PARAM_DEFINE_FLOAT(FW_GPSL_YH_D, 0.005f);
+PARAM_DEFINE_FLOAT(FW_GPSL_HDG_D, 0.1f);
 
 /**
  * GPS-less post-launch maximum roll setpoint
@@ -1188,7 +1200,7 @@ PARAM_DEFINE_FLOAT(FW_GPSL_MAX_R, 30.0f);
  * Enable GPS-less post-launch blind loiter
  *
  * Commands a constant-radius open-loop loiter after tube takeoff while GPS
- * remains unavailable. It takes priority over GPS-less yaw hold.
+ * remains unavailable. It takes priority over the configured GPS-less heading.
  *
  * @boolean
  * @group FW GPS-less Launch
