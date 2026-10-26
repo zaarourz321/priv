@@ -216,6 +216,7 @@ FixedwingPositionControl::vehicle_control_mode_poll()
 			if (!was_armed && _control_mode.flag_armed) {
 				reset_takeoff_state();
 				reset_landing_state();
+				_takeoff_transition_time = 0;
 			}
 		}
 	}
@@ -2409,6 +2410,7 @@ FixedwingPositionControl::Run()
 		// before following the next mission altitude setpoint.
 		if ((previous_control_mode == FW_POSCTRL_MODE_AUTO_TAKEOFF)
 		    && (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF)) {
+			_takeoff_transition_time = _local_pos.timestamp;
 			_tecs.handle_alt_step(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs());
 		}
 
@@ -2841,6 +2843,20 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 	// changing before the estimator handover has been validated.
 	if (gpsless_tube_launch_post_takeoff_hold_active()) {
 		alt_sp = _gpsless_tube_launch_post_takeoff_altitude;
+	}
+
+	// During takeoff, FW_TKO_PITCH_MIN prevents an unsafe pitch-down. Blend
+	// that floor to the normal limit after AUTO takeoff instead of removing it
+	// in one control cycle, which otherwise can produce a brief nose-down
+	// command while TECS changes to the mission altitude target.
+	const float pitch_blend_time = _param_fw_tko_pit_time.get();
+
+	if ((_takeoff_transition_time != 0) && (pitch_blend_time > FLT_EPSILON)) {
+		const float elapsed = (hrt_absolute_time() - _takeoff_transition_time) * 1e-6f;
+		const float blend = math::constrain(elapsed / pitch_blend_time, 0.f, 1.f);
+		const float takeoff_pitch_min = radians(_takeoff_pitch_min.get());
+		const float blended_pitch_min = takeoff_pitch_min + blend * (pitch_min_rad - takeoff_pitch_min);
+		pitch_min_rad = math::max(pitch_min_rad, blended_pitch_min);
 	}
 
 	// We need an altitude lock to calculate the TECS control

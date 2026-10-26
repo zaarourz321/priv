@@ -318,6 +318,10 @@ private:
 	// true if a launch, specifically using the launch detector, has been detected
 	bool _launch_detected{false};
 
+	// Time at which AUTO takeoff handed control to the following mission item.
+	// Used to blend the takeoff pitch floor out rather than removing it abruptly.
+	hrt_abstime _takeoff_transition_time{0};
+
 	// [deg] global position of the vehicle at the time launch is detected (using launch detector)
 	Vector2d _launch_global_position{0, 0};
 
@@ -996,6 +1000,7 @@ private:
 		(ParamFloat<px4::params::NAV_LOITER_RAD>) _param_nav_loiter_rad,
 
 		(ParamFloat<px4::params::FW_TKO_PITCH_MIN>) _takeoff_pitch_min,
+		(ParamFloat<px4::params::FW_TKO_PIT_TIME>) _param_fw_tko_pit_time,
 
 		(ParamFloat<px4::params::NAV_FW_ALT_RAD>) _param_nav_fw_alt_rad,
 

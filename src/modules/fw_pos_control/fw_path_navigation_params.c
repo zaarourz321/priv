@@ -331,6 +331,22 @@ PARAM_DEFINE_FLOAT(FW_LND_ANG, 5.0f);
 PARAM_DEFINE_FLOAT(FW_TKO_PITCH_MIN, 10.0f);
 
 /**
+ * Takeoff pitch-floor blend time
+ *
+ * Time over which the FW_TKO_PITCH_MIN constraint is released after AUTO
+ * takeoff completes. This prevents an abrupt pitch-down command when the
+ * controller hands over to the next mission item. Set to 0 to disable.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 10.0
+ * @decimal 1
+ * @increment 0.5
+ * @group FW Path Control
+ */
+PARAM_DEFINE_FLOAT(FW_TKO_PIT_TIME, 2.0f);
+
+/**
  * Takeoff Airspeed
  *
  * The calibrated airspeed setpoint TECS will stabilize to during the takeoff climbout.
