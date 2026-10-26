@@ -2837,14 +2837,6 @@ FixedwingPositionControl::reset_gpsless_tube_launch_state()
 }
 
 bool
-FixedwingPositionControl::gpsless_tube_launch_post_takeoff_hold_active() const
-{
-	return gpsless_tube_launch_enabled() && _gpsless_tube_launch_baro_altitude_active
-	       && _gpsless_tube_launch_started && (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF)
-	       && PX4_ISFINITE(_gpsless_tube_launch_post_takeoff_altitude);
-}
-
-bool
 FixedwingPositionControl::gpsless_tube_launch_estimator_healthy() const
 {
 	return (_global_position.timestamp != 0) && (hrt_elapsed_time(&_global_position.timestamp) <= 1000000)
@@ -3039,14 +3031,6 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 		// next time we run TECS we should reinitialize states
 		_reinitialize_tecs = true;
 		return;
-	}
-
-	// Do not accept a lower altitude from the first LOITER/POSITION item while
-	// GPS-less launch is explicitly holding the barometric altitude source.
-	// This removes the post-takeoff pitch-down caused by the mission item
-	// changing before the estimator handover has been validated.
-	if (gpsless_tube_launch_post_takeoff_hold_active()) {
-		alt_sp = _gpsless_tube_launch_post_takeoff_altitude;
 	}
 
 	// During takeoff, FW_TKO_PITCH_MIN prevents an unsafe pitch-down. Blend

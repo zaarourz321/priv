@@ -737,7 +737,6 @@ private:
 
 	bool gpsless_tube_launch_enabled() const;
 	bool gpsless_tube_launch_active();
-	bool gpsless_tube_launch_post_takeoff_hold_active() const;
 	float takeoff_altitude_for_tecs() const;
 	float takeoff_altitude_rate_for_tecs() const;
 	void update_gpsless_tube_launch_reference(const hrt_abstime now);

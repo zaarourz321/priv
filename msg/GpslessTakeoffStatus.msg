@@ -21,7 +21,7 @@ uint8 STATE_ESTIMATOR = 4
 float32 global_altitude                  # fused global/estimator altitude AMSL [m]
 float32 baro_altitude                    # QNH-referenced barometric altitude AMSL [m]
 float32 used_altitude                    # altitude currently passed to TECS [m]
-float32 hold_altitude_setpoint            # barometric demand held after AUTO takeoff [m]
+float32 hold_altitude_setpoint            # barometric altitude captured at AUTO takeoff handover [m]
 float32 launch_baro_altitude             # barometric altitude captured in launch tube [m]
 float32 altitude_difference              # absolute global/barometric altitude difference [m]
 
