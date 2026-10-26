@@ -92,6 +92,7 @@ set(msg_files
 	FollowTargetEstimator.msg
 	FollowTargetStatus.msg
 	GeneratorStatus.msg
+	GpsChecks.msg
 	GeofenceResult.msg
 	GimbalDeviceAttitudeStatus.msg
 	GimbalDeviceInformation.msg

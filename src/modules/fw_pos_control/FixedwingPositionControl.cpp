@@ -67,6 +67,7 @@ FixedwingPositionControl::FixedwingPositionControl(bool vtol) :
 	_pos_ctrl_landing_status_pub.advertise();
 	_tecs_status_pub.advertise();
 	_launch_detection_status_pub.advertise();
+	_gps_checks_pub.advertise();
 	_gpsless_takeoff_status_pub.advertise();
 	_landing_gear_pub.advertise();
 
@@ -585,6 +586,41 @@ FixedwingPositionControl::gpsless_takeoff_status_publish(const hrt_abstime now)
 	status.gps_healthy_timeout_s = _param_fw_gpsl_gps_t.get();
 
 	_gpsless_takeoff_status_pub.publish(status);
+}
+
+void
+FixedwingPositionControl::gps_checks_publish(const hrt_abstime now)
+{
+	gps_checks_s status{};
+
+	status.timestamp = now;
+	status.enabled = gps_fallback_enabled();
+	status.gps_bad = _gps_fallback_gps_bad;
+	status.sensor_gps_lost = _gps_fallback_sensor_gps_lost;
+	status.vehicle_gps_lost = _gps_fallback_vehicle_gps_lost;
+	status.raw_gps_fresh = !_gps_fallback_vehicle_gps_lost;
+	status.sensor_gps_fresh = !_gps_fallback_sensor_gps_lost;
+	status.baro_valid = _gps_fallback_baro_valid;
+	status.fused_altitude_valid = _gps_fallback_fused_altitude_valid;
+	status.fallback_suppressed_by_gpsless_takeoff = _gps_fallback_suppressed;
+	status.altitude_source = (_gps_fallback_altitude_source == GpsFallbackAltitudeSource::BARO) ?
+				 gps_checks_s::ALTITUDE_SOURCE_BARO : gps_checks_s::ALTITUDE_SOURCE_FUSED;
+	status.yaw_hold_active = _gps_fallback_yaw_hold_active;
+	status.loiter_active = _gps_fallback_loiter_active;
+	status.takeoff_heading_active = _gps_fallback_takeoff_heading_active;
+	status.raw_gps_eph = _vehicle_gps_position.eph;
+	status.raw_gps_epv = _vehicle_gps_position.epv;
+	status.satellites_used = _vehicle_gps_position.satellites_used;
+	status.fused_altitude = _gps_fallback_fused_altitude;
+	status.baro_altitude = _baro_altitude;
+	status.used_altitude = _current_altitude;
+	status.gps_good_elapsed_s = (_gps_fallback_good_since != 0) ?
+					 (now - _gps_fallback_good_since) * 1e-6f : NAN;
+	status.held_yaw = _gps_fallback_yaw_hold_ref;
+	status.yaw_error = _gps_fallback_yaw_error;
+	status.fallback_roll_setpoint = _gps_fallback_roll_setpoint;
+
+	_gps_checks_pub.publish(status);
 }
 
 void
@@ -2387,6 +2423,8 @@ FixedwingPositionControl::Run()
 			}
 		}
 
+		update_gps_fallback(_local_pos.timestamp);
+
 		if (_vehicle_land_detected_sub.updated()) {
 			vehicle_land_detected_s vehicle_land_detected;
 
@@ -2503,7 +2541,9 @@ FixedwingPositionControl::Run()
 
 		}
 
+		apply_gps_fallback_lateral();
 		gpsless_takeoff_status_publish(_local_pos.timestamp);
+		gps_checks_publish(_local_pos.timestamp);
 
 		if (_control_mode_current != FW_POSCTRL_MODE_OTHER) {
 
@@ -2579,6 +2619,163 @@ bool
 FixedwingPositionControl::gpsless_tube_launch_enabled() const
 {
 	return _param_fw_gpsl_tko_en.get() && _param_fw_laun_detcn_on.get();
+}
+
+bool
+FixedwingPositionControl::gps_fallback_enabled() const
+{
+	return _param_fw_gpsfb_en.get();
+}
+
+void
+FixedwingPositionControl::update_gps_fallback(const hrt_abstime now)
+{
+	_sensor_gps_sub.update(&_sensor_gps);
+	_vehicle_gps_position_sub.update(&_vehicle_gps_position);
+
+	_gps_fallback_sensor_gps_lost = (_sensor_gps.timestamp == 0)
+					 || (hrt_elapsed_time(&_sensor_gps.timestamp) > 1_s);
+	_gps_fallback_vehicle_gps_lost = (_vehicle_gps_position.timestamp == 0)
+					  || (hrt_elapsed_time(&_vehicle_gps_position.timestamp) > 1_s);
+	_gps_fallback_fused_altitude = -_local_pos.z + _local_pos.ref_alt;
+	_gps_fallback_fused_altitude_valid = PX4_ISFINITE(_local_pos.z) && PX4_ISFINITE(_local_pos.ref_alt);
+	_gps_fallback_baro_valid = PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
+					   && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1_s);
+
+	const bool gps_quality_valid = PX4_ISFINITE(_vehicle_gps_position.eph)
+					       && PX4_ISFINITE(_vehicle_gps_position.epv);
+	_gps_fallback_gps_bad = _gps_fallback_sensor_gps_lost || _gps_fallback_vehicle_gps_lost
+					|| !gps_quality_valid
+					|| (_vehicle_gps_position.eph > _param_fw_gpsfb_eph.get())
+					|| (_vehicle_gps_position.epv > _param_fw_gpsfb_epv.get());
+
+	// The existing dedicated tube-launch implementation provides its own TECS
+	// barometric source and handover. Never overwrite its navigation altitude.
+	_gps_fallback_suppressed = gpsless_tube_launch_enabled();
+
+	const auto select_altitude_source = [this](const GpsFallbackAltitudeSource source) {
+		if (_gps_fallback_altitude_source == source) {
+			return;
+		}
+
+		_gps_fallback_altitude_source = source;
+
+		if (source == GpsFallbackAltitudeSource::BARO) {
+			_current_altitude = _baro_altitude;
+			_tecs.handle_alt_step(_baro_altitude, _baro_altitude_rate);
+
+		} else {
+			_current_altitude = _gps_fallback_fused_altitude;
+			_tecs.handle_alt_step(_gps_fallback_fused_altitude, -_local_pos.vz);
+		}
+	};
+
+	if (!gps_fallback_enabled() || _gps_fallback_suppressed) {
+		_gps_fallback_good_since = 0;
+		select_altitude_source(GpsFallbackAltitudeSource::FUSED);
+		_current_altitude = _gps_fallback_fused_altitude;
+		return;
+	}
+
+	if (_gps_fallback_altitude_source == GpsFallbackAltitudeSource::FUSED) {
+		if ((_gps_fallback_gps_bad || !_gps_fallback_fused_altitude_valid) && _gps_fallback_baro_valid) {
+			_gps_fallback_good_since = 0;
+			select_altitude_source(GpsFallbackAltitudeSource::BARO);
+		}
+
+	} else {
+		// A missing barometer must never leave the controller using NaN altitude.
+		if (!_gps_fallback_baro_valid && _gps_fallback_fused_altitude_valid) {
+			_gps_fallback_good_since = 0;
+			select_altitude_source(GpsFallbackAltitudeSource::FUSED);
+
+		} else if (!_gps_fallback_gps_bad && _gps_fallback_fused_altitude_valid) {
+			if (_gps_fallback_good_since == 0) {
+				_gps_fallback_good_since = now;
+			}
+
+			const hrt_abstime recovery_time = static_cast<hrt_abstime>(_param_fw_gpsfb_rec_t.get() * 1e6f);
+
+			if (now - _gps_fallback_good_since >= recovery_time) {
+				select_altitude_source(GpsFallbackAltitudeSource::FUSED);
+				_gps_fallback_good_since = 0;
+			}
+
+		} else {
+			_gps_fallback_good_since = 0;
+		}
+	}
+
+	_current_altitude = (_gps_fallback_altitude_source == GpsFallbackAltitudeSource::BARO) ?
+				    _baro_altitude : _gps_fallback_fused_altitude;
+}
+
+void
+FixedwingPositionControl::apply_gps_fallback_lateral()
+{
+	_gps_fallback_yaw_hold_active = false;
+	_gps_fallback_loiter_active = false;
+	_gps_fallback_takeoff_heading_active = false;
+	_gps_fallback_yaw_error = NAN;
+	_gps_fallback_roll_setpoint = NAN;
+
+	if (!gps_fallback_enabled() || _gps_fallback_suppressed || !_control_mode.flag_armed) {
+		_gps_fallback_was_bad = false;
+		return;
+	}
+
+	if (!_gps_fallback_gps_bad) {
+		_gps_fallback_was_bad = false;
+		return;
+	}
+
+	const float max_roll = radians(_param_fw_gpsfb_max_r.get());
+
+	if ((_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF) && _param_fw_gpsfb_tk_en.get()) {
+		if (_current_altitude < _param_fw_gpsfb_tk_alt.get()) {
+			_att_sp.roll_body = 0.f;
+
+		} else {
+			_gps_fallback_yaw_error = wrap_pi(radians(_param_fw_gpsfb_tk_hdg.get()) - _yaw);
+			_att_sp.roll_body = constrain(_param_fw_gpsfb_tk_p.get() * _gps_fallback_yaw_error
+						      - _param_fw_gpsfb_tk_d.get() * _yawrate, -max_roll, max_roll);
+		}
+
+		_gps_fallback_takeoff_heading_active = true;
+		_gps_fallback_roll_setpoint = _att_sp.roll_body;
+		return;
+	}
+
+	const bool supported_navigation_state = (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION)
+							|| (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER)
+							|| (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_ORBIT);
+
+	if (!supported_navigation_state || (_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF)) {
+		return;
+	}
+
+	if (_param_fw_gpsfb_ltr_en.get()) {
+		const float radius = _param_fw_gpsfb_ltr_rad.get();
+
+		if (radius > FLT_EPSILON && PX4_ISFINITE(_airspeed)) {
+			_att_sp.roll_body = constrain(atanf((_airspeed * _airspeed) / (CONSTANTS_ONE_G * radius)), -max_roll, max_roll);
+			_gps_fallback_loiter_active = true;
+			_gps_fallback_roll_setpoint = _att_sp.roll_body;
+		}
+
+	} else if (_param_fw_gpsfb_yh_en.get()) {
+		if (!_gps_fallback_was_bad || !PX4_ISFINITE(_gps_fallback_yaw_hold_ref)) {
+			_gps_fallback_yaw_hold_ref = _yaw;
+		}
+
+		_gps_fallback_yaw_error = wrap_pi(_gps_fallback_yaw_hold_ref - _yaw);
+		_att_sp.roll_body = constrain(_param_fw_gpsfb_yh_p.get() * _gps_fallback_yaw_error
+					      - _param_fw_gpsfb_yh_d.get() * _yawrate, -max_roll, max_roll);
+		_gps_fallback_yaw_hold_active = true;
+		_gps_fallback_roll_setpoint = _att_sp.roll_body;
+	}
+
+	_gps_fallback_was_bad = true;
 }
 
 bool

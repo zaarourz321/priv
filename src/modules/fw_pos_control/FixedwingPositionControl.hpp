@@ -70,6 +70,7 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionCallback.hpp>
 #include <uORB/topics/airspeed_validated.h>
+#include <uORB/topics/gps_checks.h>
 #include <uORB/topics/gpsless_takeoff_status.h>
 #include <uORB/topics/landing_gear.h>
 #include <uORB/topics/launch_detection_status.h>
@@ -80,6 +81,7 @@
 #include <uORB/topics/position_controller_landing_status.h>
 #include <uORB/topics/position_controller_status.h>
 #include <uORB/topics/position_setpoint_triplet.h>
+#include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/tecs_status.h>
 #include <uORB/topics/trajectory_setpoint.h>
 #include <uORB/topics/vehicle_air_data.h>
@@ -196,6 +198,8 @@ private:
 	uORB::Subscription _wind_sub{ORB_ID(wind)};
 	uORB::Subscription _control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::Subscription _global_pos_sub{ORB_ID(vehicle_global_position)};
+	uORB::Subscription _sensor_gps_sub{ORB_ID(sensor_gps)};
+	uORB::Subscription _vehicle_gps_position_sub{ORB_ID(vehicle_gps_position)};
 	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Subscription _pos_sp_triplet_sub{ORB_ID(position_setpoint_triplet)};
 	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
@@ -213,6 +217,7 @@ private:
 	uORB::Publication<position_controller_landing_status_s>	_pos_ctrl_landing_status_pub{ORB_ID(position_controller_landing_status)};
 	uORB::Publication<tecs_status_s> _tecs_status_pub{ORB_ID(tecs_status)};
 	uORB::Publication<launch_detection_status_s> _launch_detection_status_pub{ORB_ID(launch_detection_status)};
+	uORB::Publication<gps_checks_s> _gps_checks_pub{ORB_ID(gps_checks)};
 	uORB::Publication<gpsless_takeoff_status_s> _gpsless_takeoff_status_pub{ORB_ID(gpsless_takeoff_status)};
 	uORB::PublicationMulti<orbit_status_s> _orbit_status_pub{ORB_ID(orbit_status)};
 	uORB::Publication<landing_gear_s> _landing_gear_pub{ORB_ID(landing_gear)};
@@ -225,6 +230,8 @@ private:
 	vehicle_control_mode_s _control_mode{};
 	vehicle_local_position_s _local_pos{};
 	vehicle_global_position_s _global_position{};
+	sensor_gps_s _sensor_gps{};
+	sensor_gps_s _vehicle_gps_position{};
 	vehicle_status_s _vehicle_status{};
 
 	bool _position_setpoint_previous_valid{false};
@@ -265,6 +272,30 @@ private:
 	float _baro_altitude_previous{NAN};
 	hrt_abstime _baro_altitude_timestamp{0};
 	hrt_abstime _baro_altitude_previous_timestamp{0};
+
+	// Generic fixed-wing GPS fallback. This is deliberately separate from the
+	// dedicated GPS-less tube-launch state machine below.
+	enum class GpsFallbackAltitudeSource : uint8_t {
+		FUSED = 0,
+		BARO
+	};
+
+	GpsFallbackAltitudeSource _gps_fallback_altitude_source{GpsFallbackAltitudeSource::FUSED};
+	hrt_abstime _gps_fallback_good_since{0};
+	bool _gps_fallback_gps_bad{false};
+	bool _gps_fallback_sensor_gps_lost{true};
+	bool _gps_fallback_vehicle_gps_lost{true};
+	bool _gps_fallback_fused_altitude_valid{false};
+	bool _gps_fallback_baro_valid{false};
+	bool _gps_fallback_suppressed{false};
+	float _gps_fallback_fused_altitude{NAN};
+	float _gps_fallback_yaw_hold_ref{NAN};
+	bool _gps_fallback_was_bad{false};
+	bool _gps_fallback_yaw_hold_active{false};
+	bool _gps_fallback_loiter_active{false};
+	bool _gps_fallback_takeoff_heading_active{false};
+	float _gps_fallback_yaw_error{NAN};
+	float _gps_fallback_roll_setpoint{NAN};
 
 	float _pitch{0.0f};
 	float _yaw{0.0f};
@@ -470,6 +501,7 @@ private:
 	void tecs_status_publish(float alt_sp, float equivalent_airspeed_sp, float true_airspeed_derivative_raw,
 				 float throttle_trim);
 	void gpsless_takeoff_status_publish(const hrt_abstime now);
+	void gps_checks_publish(const hrt_abstime now);
 	void publishLocalPositionSetpoint(const position_setpoint_s &current_waypoint);
 
 	/**
@@ -711,6 +743,9 @@ private:
 	void update_gpsless_tube_launch_reference(const hrt_abstime now);
 	bool gpsless_tube_launch_estimator_healthy() const;
 	void reset_gpsless_tube_launch_state();
+	bool gps_fallback_enabled() const;
+	void update_gps_fallback(const hrt_abstime now);
+	void apply_gps_fallback_lateral();
 
 	/**
 	 * @brief Decides which control mode to execute.
@@ -1033,7 +1068,23 @@ private:
 		(ParamFloat<px4::params::FW_GPSL_GPS_T>) _param_fw_gpsl_gps_t,
 		(ParamFloat<px4::params::FW_GPSL_GPS_EPH>) _param_fw_gpsl_gps_eph,
 		(ParamFloat<px4::params::FW_GPSL_GPS_EPV>) _param_fw_gpsl_gps_epv,
-		(ParamFloat<px4::params::FW_GPSL_ALT_ERR>) _param_fw_gpsl_alt_err
+		(ParamFloat<px4::params::FW_GPSL_ALT_ERR>) _param_fw_gpsl_alt_err,
+
+		(ParamBool<px4::params::FW_GPSFB_EN>) _param_fw_gpsfb_en,
+		(ParamFloat<px4::params::FW_GPSFB_EPH>) _param_fw_gpsfb_eph,
+		(ParamFloat<px4::params::FW_GPSFB_EPV>) _param_fw_gpsfb_epv,
+		(ParamFloat<px4::params::FW_GPSFB_REC_T>) _param_fw_gpsfb_rec_t,
+		(ParamBool<px4::params::FW_GPSFB_YH_EN>) _param_fw_gpsfb_yh_en,
+		(ParamFloat<px4::params::FW_GPSFB_YH_P>) _param_fw_gpsfb_yh_p,
+		(ParamFloat<px4::params::FW_GPSFB_YH_D>) _param_fw_gpsfb_yh_d,
+		(ParamFloat<px4::params::FW_GPSFB_MAX_R>) _param_fw_gpsfb_max_r,
+		(ParamBool<px4::params::FW_GPSFB_LTR_EN>) _param_fw_gpsfb_ltr_en,
+		(ParamFloat<px4::params::FW_GPSFB_LTR_RAD>) _param_fw_gpsfb_ltr_rad,
+		(ParamBool<px4::params::FW_GPSFB_TK_EN>) _param_fw_gpsfb_tk_en,
+		(ParamFloat<px4::params::FW_GPSFB_TK_HDG>) _param_fw_gpsfb_tk_hdg,
+		(ParamFloat<px4::params::FW_GPSFB_TK_P>) _param_fw_gpsfb_tk_p,
+		(ParamFloat<px4::params::FW_GPSFB_TK_D>) _param_fw_gpsfb_tk_d,
+		(ParamFloat<px4::params::FW_GPSFB_TK_ALT>) _param_fw_gpsfb_tk_alt
 	)
 
 };

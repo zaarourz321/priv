@@ -1138,6 +1138,200 @@ PARAM_DEFINE_FLOAT(FW_GPSL_GPS_EPV, 3.0f);
 PARAM_DEFINE_FLOAT(FW_GPSL_ALT_ERR, 5.0f);
 
 /**
+ * Enable fixed-wing GPS fallback
+ *
+ * Enables the GPS-health monitor, barometric altitude fallback, and lateral
+ * heading/loiter fallback features. The dedicated FW_GPSL_TKO_EN tube-launch
+ * implementation remains separate and takes priority while active.
+ *
+ * @boolean
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_INT32(FW_GPSFB_EN, 0);
+
+/**
+ * GPS fallback maximum horizontal accuracy error
+ *
+ * Raw GPS is considered unhealthy when its EPH exceeds this value.
+ *
+ * @unit m
+ * @min 0.1
+ * @max 100.0
+ * @decimal 1
+ * @increment 0.1
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_EPH, 3.0f);
+
+/**
+ * GPS fallback maximum vertical accuracy error
+ *
+ * Raw GPS is considered unhealthy when its EPV exceeds this value.
+ *
+ * @unit m
+ * @min 0.1
+ * @max 100.0
+ * @decimal 1
+ * @increment 0.1
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_EPV, 3.0f);
+
+/**
+ * GPS fallback recovery time
+ *
+ * Continuous healthy GPS time required before returning from barometric to
+ * fused estimator altitude.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 120.0
+ * @decimal 1
+ * @increment 0.5
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_REC_T, 3.0f);
+
+/**
+ * Enable GPS-loss heading hold
+ *
+ * Captures the current yaw when GPS becomes unhealthy in AUTO Mission, AUTO
+ * Loiter, or Orbit, then commands roll to hold that heading.
+ *
+ * @boolean
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_INT32(FW_GPSFB_YH_EN, 1);
+
+/**
+ * GPS-loss heading-hold proportional gain
+ *
+ * Maps yaw error in radians to roll setpoint in radians.
+ *
+ * @min 0.0
+ * @max 5.0
+ * @decimal 3
+ * @increment 0.025
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_YH_P, 0.25f);
+
+/**
+ * GPS-loss heading-hold yaw-rate damping gain
+ *
+ * Multiplies yaw rate in radians per second before it is subtracted from the
+ * heading-hold roll setpoint.
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_YH_D, 0.005f);
+
+/**
+ * GPS fallback maximum roll setpoint
+ *
+ * Applies to takeoff heading hold, GPS-loss heading hold, and fallback loiter.
+ *
+ * @unit deg
+ * @min 1.0
+ * @max 60.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_MAX_R, 30.0f);
+
+/**
+ * Enable GPS-loss loiter
+ *
+ * Commands a constant-radius open-loop loiter when GPS is unhealthy instead
+ * of holding the heading captured at GPS loss.
+ *
+ * @boolean
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_INT32(FW_GPSFB_LTR_EN, 0);
+
+/**
+ * GPS-loss loiter radius
+ *
+ * @unit m
+ * @min 10.0
+ * @max 10000.0
+ * @decimal 1
+ * @increment 10.0
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_LTR_RAD, 150.0f);
+
+/**
+ * Enable predefined heading during GPS-loss takeoff
+ *
+ * Above FW_GPSFB_TK_ALT, commands roll to hold FW_GPSFB_TK_HDG if GPS is
+ * unhealthy during a non-GPS-less AUTO takeoff.
+ *
+ * @boolean
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_INT32(FW_GPSFB_TK_EN, 1);
+
+/**
+ * GPS-loss takeoff heading
+ *
+ * Fixed heading used during a non-GPS-less takeoff while GPS is unhealthy.
+ *
+ * @unit deg
+ * @min -180.0
+ * @max 180.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_TK_HDG, 0.0f);
+
+/**
+ * GPS-loss takeoff heading proportional gain
+ *
+ * Maps takeoff heading error in radians to roll setpoint in radians.
+ *
+ * @min 0.0
+ * @max 5.0
+ * @decimal 3
+ * @increment 0.025
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_TK_P, 0.5f);
+
+/**
+ * GPS-loss takeoff heading yaw-rate damping gain
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_TK_D, 0.1f);
+
+/**
+ * GPS-loss takeoff heading activation altitude
+ *
+ * Below this controller altitude, zero roll is commanded during a GPS-loss
+ * takeoff for a straight launch.
+ *
+ * @unit m
+ * @min 0.0
+ * @max 500.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_TK_ALT, 30.0f);
+
+/**
  * Flaps setting during take-off
  *
  * Sets a fraction of full flaps during take-off.
