@@ -175,11 +175,7 @@ static inline union px4_custom_mode get_px4_custom_mode(uint8_t nav_state)
 
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV:
 		custom_mode.main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
-		// Stock QGroundControl has no entry for the private GPSLESS NAV Auto
-		// subtype. Advertise the closest supported Auto mode so it does not
-		// send an unknown mode request back to Commander. The internal
-		// vehicle_status.nav_state remains AUTO_GPSLESS_NAV.
-		custom_mode.sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_LOITER;
+		custom_mode.sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_GPSLESS_NAV;
 		break;
 	}
 
