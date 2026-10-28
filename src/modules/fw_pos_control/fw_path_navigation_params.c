@@ -1350,6 +1350,118 @@ PARAM_DEFINE_INT32(FW_GPSFB_LTR_EN, 0);
 PARAM_DEFINE_FLOAT(FW_GPSFB_LTR_RAD, 150.0f);
 
 /**
+ * Enable automatic GPS-less NAV after fixed-wing takeoff
+ *
+ * Automatically takes control after an AUTO takeoff item only if raw GPS is
+ * absent or fails the FW_GPSFB_EPH and FW_GPSFB_EPV quality limits. GPS-less
+ * NAV holds the selected barometric/AMSL altitude, holds the configured heading
+ * with bank commands, and uses airspeed for speed control. GPS, global
+ * position, ground speed and wind are not used for control.
+ *
+ * @boolean
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_INT32(FW_GPSNAV_EN, 0);
+
+/**
+ * GPS-less NAV heading
+ *
+ * True/NED heading commanded after takeoff. The heading controller banks the
+ * aircraft to capture and hold this direction without GPS position feedback.
+ *
+ * @unit deg
+ * @min -180.0
+ * @max 180.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_FLOAT(FW_GPSNAV_HDG, 0.0f);
+
+/**
+ * GPS-less NAV heading proportional gain
+ *
+ * Maps heading error in radians to roll setpoint in radians.
+ *
+ * @min 0.0
+ * @max 5.0
+ * @decimal 3
+ * @increment 0.025
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_FLOAT(FW_GPSNAV_HDG_P, 0.5f);
+
+/**
+ * GPS-less NAV heading yaw-rate damping gain
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_FLOAT(FW_GPSNAV_HDG_D, 0.1f);
+
+/**
+ * GPS-less NAV maximum roll setpoint
+ *
+ * @unit deg
+ * @min 1.0
+ * @max 60.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_FLOAT(FW_GPSNAV_MAX_R, 30.0f);
+
+/**
+ * GPS-less NAV equivalent airspeed setpoint
+ *
+ * A positive value is the fixed equivalent airspeed demand used without GPS
+ * or ground-speed adaptation. Zero uses FW_AIRSPD_TRIM.
+ *
+ * @unit m/s
+ * @min 0.0
+ * @max 100.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_FLOAT(FW_GPSNAV_ASPD, 0.0f);
+
+/**
+ * GPS-less NAV altitude setpoint source
+ *
+ * Selects the altitude target used when GPS-less NAV automatically takes over
+ * after a takeoff item: 0 uses the next mission waypoint altitude; 1 uses
+ * FW_GPSNAV_ALT. If the selected source is invalid, the controller safely
+ * holds the barometric altitude at mode entry.
+ *
+ * @value 0 Next mission waypoint
+ * @value 1 Fixed altitude parameter
+ * @min 0
+ * @max 1
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_INT32(FW_GPSNAV_ALTMOD, 0);
+
+/**
+ * GPS-less NAV fixed altitude setpoint
+ *
+ * AMSL altitude target used when FW_GPSNAV_ALTMOD is 1. It must use the
+ * same QNH/barometric datum as vehicle_air_data.baro_alt_meter and mission
+ * waypoint altitudes.
+ *
+ * @unit m
+ * @min -1000.0
+ * @max 10000.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_FLOAT(FW_GPSNAV_ALT, 0.0f);
+
+/**
  * Flaps setting during take-off
  *
  * Sets a fraction of full flaps during take-off.

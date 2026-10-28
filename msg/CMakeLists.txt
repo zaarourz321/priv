@@ -102,6 +102,7 @@ set(msg_files
 	GimbalManagerSetManualControl.msg
 	GimbalManagerStatus.msg
 	GpsDump.msg
+	GpslessNavStatus.msg
 	GpslessTakeoffStatus.msg
 	GpsInjectData.msg
 	GimbalControls.msg

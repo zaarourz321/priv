@@ -821,6 +821,13 @@ void Navigator::run()
 			_precland.set_mode(PrecLandMode::Required);
 			break;
 
+		case vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV:
+			// The fixed-wing position controller owns this Commander mode directly.
+			// Do not publish mission/global-position setpoints into it.
+			navigation_mode_new = nullptr;
+			_can_loiter_at_sp = false;
+			break;
+
 		case vehicle_status_s::NAVIGATION_STATE_MANUAL:
 		case vehicle_status_s::NAVIGATION_STATE_ACRO:
 		case vehicle_status_s::NAVIGATION_STATE_ALTCTL:

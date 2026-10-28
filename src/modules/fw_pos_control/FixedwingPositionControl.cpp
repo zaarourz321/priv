@@ -68,6 +68,7 @@ FixedwingPositionControl::FixedwingPositionControl(bool vtol) :
 	_tecs_status_pub.advertise();
 	_launch_detection_status_pub.advertise();
 	_gps_checks_pub.advertise();
+	_gpsless_nav_status_pub.advertise();
 	_gpsless_takeoff_status_pub.advertise();
 	_landing_gear_pub.advertise();
 
@@ -611,7 +612,9 @@ FixedwingPositionControl::gps_checks_publish(const hrt_abstime now)
 	status.fused_altitude_valid = _gps_fallback_fused_altitude_valid;
 	status.fallback_suppressed_by_gpsless_takeoff = _gps_fallback_suppressed;
 	const bool gpsless_baro_active = gpsless_tube_launch_active();
-	status.altitude_source = (gpsless_baro_active || (_gps_fallback_altitude_source == GpsFallbackAltitudeSource::BARO)) ?
+	const bool gpsless_nav_baro_active = gpsless_nav_active() && gpsless_nav_baro_valid();
+	status.altitude_source = (gpsless_baro_active || gpsless_nav_baro_active
+				  || (_gps_fallback_altitude_source == GpsFallbackAltitudeSource::BARO)) ?
 				 gps_checks_s::ALTITUDE_SOURCE_BARO : gps_checks_s::ALTITUDE_SOURCE_FUSED;
 	status.yaw_hold_active = _gps_fallback_yaw_hold_active;
 	status.loiter_active = _gps_fallback_loiter_active;
@@ -622,7 +625,7 @@ FixedwingPositionControl::gps_checks_publish(const hrt_abstime now)
 	status.baro_altitude = _baro_altitude;
 	// _current_altitude remains in the estimator/navigation frame during a
 	// GPS-less launch. Report the actual TECS state, which is barometric.
-	status.used_altitude = gpsless_baro_active ? takeoff_altitude_for_tecs() : _current_altitude;
+	status.used_altitude = (gpsless_baro_active || gpsless_nav_baro_active) ? takeoff_altitude_for_tecs() : _current_altitude;
 	status.gps_good_elapsed_s = (_gps_fallback_good_since != 0) ?
 					 (now - _gps_fallback_good_since) * 1e-6f : NAN;
 	status.held_yaw = _gps_fallback_yaw_hold_ref;
@@ -630,6 +633,40 @@ FixedwingPositionControl::gps_checks_publish(const hrt_abstime now)
 	status.fallback_roll_setpoint = _gps_fallback_roll_setpoint;
 
 	_gps_checks_pub.publish(status);
+}
+
+void
+FixedwingPositionControl::gpsless_nav_status_publish(const hrt_abstime now)
+{
+	gpsless_nav_status_s status{};
+
+	status.timestamp = now;
+	status.enabled = gpsless_nav_enabled();
+	status.active = gpsless_nav_active();
+	status.baro_valid = gpsless_nav_baro_valid();
+	status.gps_available = !_gps_fallback_vehicle_gps_lost;
+	status.gps_ignored = gpsless_nav_active();
+	status.baro_altitude = _baro_altitude;
+	status.baro_climb_rate = _baro_altitude_rate;
+	status.baro_altitude_setpoint = _gpsless_nav_baro_altitude_setpoint;
+	status.next_waypoint_altitude = _gpsless_nav_next_waypoint_altitude;
+	status.altitude_mode = _param_fw_gpsnav_alt_mode.get();
+	status.airspeed = _airspeed;
+	status.airspeed_setpoint = (_param_fw_gpsnav_aspd.get() > FLT_EPSILON) ?
+					 _param_fw_gpsnav_aspd.get() : _param_fw_airspd_trim.get();
+	status.heading_setpoint = radians(_param_fw_gpsnav_hdg.get());
+	status.heading_error = _gpsless_nav_heading_error;
+	status.roll_setpoint = _gpsless_nav_roll_setpoint;
+	status.air_velocity_north = _gpsless_nav_air_velocity(0);
+	status.air_velocity_east = _gpsless_nav_air_velocity(1);
+	status.air_velocity_down = _gpsless_nav_air_velocity(2);
+	status.dead_reckoned_north = _gpsless_nav_dead_reckoned_position(0);
+	status.dead_reckoned_east = _gpsless_nav_dead_reckoned_position(1);
+	status.raw_gps_eph = _vehicle_gps_position.eph;
+	status.raw_gps_epv = _vehicle_gps_position.epv;
+	status.satellites_used = _vehicle_gps_position.satellites_used;
+
+	_gpsless_nav_status_pub.publish(status);
 }
 
 void
@@ -828,6 +865,11 @@ FixedwingPositionControl::set_control_mode_current(const hrt_abstime &now)
 	if (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROTARY_WING && !_vehicle_status.in_transition_mode) {
 		_control_mode_current = FW_POSCTRL_MODE_OTHER;
 		return; // do not publish the setpoint
+	}
+
+	if (gpsless_nav_active()) {
+		_control_mode_current = FW_POSCTRL_MODE_GPSLESS_NAV;
+		return;
 	}
 
 	FW_POSCTRL_MODE commanded_position_control_mode = _control_mode_current;
@@ -2439,6 +2481,9 @@ FixedwingPositionControl::Run()
 			}
 		}
 
+		// Update the Commander state before source selection so GPS-less NAV
+		// suppresses GPS/fused-altitude fallback from its very first cycle.
+		_vehicle_status_sub.update(&_vehicle_status);
 		update_gps_fallback(_local_pos.timestamp);
 
 		if (_vehicle_land_detected_sub.updated()) {
@@ -2449,13 +2494,19 @@ FixedwingPositionControl::Run()
 			}
 		}
 
-		_vehicle_status_sub.update(&_vehicle_status);
-
 		Vector2d curr_pos(_current_latitude, _current_longitude);
 		Vector2f ground_speed(_local_pos.vx, _local_pos.vy);
 
 		const FW_POSCTRL_MODE previous_control_mode = _control_mode_current;
 		set_control_mode_current(_local_pos.timestamp);
+
+		// Save the next mission altitude while Navigator is still publishing the
+		// TAKEOFF triplet. Navigator intentionally clears that triplet as soon as
+		// Commander changes into GPSLESS NAV.
+		if ((_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF) && _position_setpoint_next_valid) {
+			_gpsless_nav_next_waypoint_altitude = _pos_sp_triplet.next.alt;
+		}
+
 		update_gpsless_tube_launch_reference(_local_pos.timestamp);
 
 		// A TAKEOFF item can end while the TECS altitude reference is still
@@ -2471,6 +2522,8 @@ FixedwingPositionControl::Run()
 							       && (_post_takeoff_target_altitude >= _takeoff_completion_altitude);
 			_tecs.handle_alt_step(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs());
 		}
+
+		update_gpsless_nav();
 
 		update_in_air_states(_local_pos.timestamp);
 
@@ -2541,6 +2594,11 @@ FixedwingPositionControl::Run()
 				break;
 			}
 
+		case FW_POSCTRL_MODE_GPSLESS_NAV: {
+				control_gpsless_nav(control_interval);
+				break;
+			}
+
 		case FW_POSCTRL_MODE_MANUAL_POSITION: {
 				control_manual_position(control_interval, curr_pos, ground_speed);
 				break;
@@ -2565,10 +2623,11 @@ FixedwingPositionControl::Run()
 		// end of AUTO takeoff until its GPS/altitude handover is complete.
 		// Do not let the independent GPS-fallback controller release or
 		// replace that heading command based on one cached GPS message.
-		if (!apply_gpsless_tube_launch_lateral()) {
+		if (!gpsless_nav_active() && !apply_gpsless_tube_launch_lateral()) {
 			apply_gps_fallback_lateral();
 		}
 		gpsless_takeoff_status_publish(_local_pos.timestamp);
+		gpsless_nav_status_publish(_local_pos.timestamp);
 		gps_checks_publish(_local_pos.timestamp);
 
 		if (_control_mode_current != FW_POSCTRL_MODE_OTHER) {
@@ -2686,7 +2745,15 @@ FixedwingPositionControl::update_gps_fallback(const hrt_abstime now)
 	// The existing dedicated tube-launch implementation provides its own TECS
 	// barometric source and handover. Suppress only while that source is
 	// actually active: FW_GPSL_TKO_EN may remain enabled for the whole flight.
-	_gps_fallback_suppressed = _gpsless_tube_launch_baro_altitude_active;
+	_gps_fallback_suppressed = _gpsless_tube_launch_baro_altitude_active || gpsless_nav_active();
+
+	// GPS-less NAV owns the vertical state while active. Do not allow the
+	// generic fallback to re-seed TECS from fused/GPS-backed altitude even for
+	// one control cycle.
+	if (gpsless_nav_active()) {
+		_gps_fallback_good_since = 0;
+		return;
+	}
 
 	const auto select_altitude_source = [this](const GpsFallbackAltitudeSource source) {
 		if (_gps_fallback_altitude_source == source) {
@@ -2743,6 +2810,142 @@ FixedwingPositionControl::update_gps_fallback(const hrt_abstime now)
 
 	_current_altitude = (_gps_fallback_altitude_source == GpsFallbackAltitudeSource::BARO) ?
 				    _baro_altitude : _gps_fallback_fused_altitude;
+}
+
+bool
+FixedwingPositionControl::gpsless_nav_enabled() const
+{
+	return _param_fw_gpsnav_en.get();
+}
+
+bool
+FixedwingPositionControl::gpsless_nav_active() const
+{
+	return _vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV;
+}
+
+bool
+FixedwingPositionControl::gpsless_nav_baro_valid() const
+{
+	return PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
+	       && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1_s);
+}
+
+void
+FixedwingPositionControl::update_gpsless_nav()
+{
+	if (!gpsless_nav_active()) {
+		_gpsless_nav_initialized = false;
+		_gpsless_nav_baro_altitude_setpoint = NAN;
+
+		// Keep the following mission altitude while AUTO takeoff is active.
+		// It is consumed on the first GPSLESS NAV cycle after Commander has
+		// completed the takeoff-item handover.
+		if (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF) {
+			_gpsless_nav_next_waypoint_altitude = NAN;
+		}
+
+		_gpsless_nav_heading_error = NAN;
+		_gpsless_nav_roll_setpoint = NAN;
+		return;
+	}
+
+	if (gpsless_nav_baro_valid()) {
+		if (!_gpsless_nav_initialized) {
+			_gpsless_nav_initialized = true;
+
+			if ((_param_fw_gpsnav_alt_mode.get() == 0)
+			    && PX4_ISFINITE(_gpsless_nav_next_waypoint_altitude)) {
+				_gpsless_nav_baro_altitude_setpoint = _gpsless_nav_next_waypoint_altitude;
+
+			} else if ((_param_fw_gpsnav_alt_mode.get() == 1)
+				   && PX4_ISFINITE(_param_fw_gpsnav_alt.get())) {
+				_gpsless_nav_baro_altitude_setpoint = _param_fw_gpsnav_alt.get();
+
+			} else {
+				// A missing next waypoint must never produce a NaN TECS setpoint.
+				// Hold entry barometric altitude until the pilot selects a valid
+				// fixed altitude or uploads a mission with a following waypoint.
+				_gpsless_nav_baro_altitude_setpoint = _baro_altitude;
+			}
+			_gpsless_nav_heading_error = NAN;
+			_gpsless_nav_roll_setpoint = NAN;
+			_gpsless_nav_dead_reckoned_position = {};
+			_gpsless_nav_air_velocity = {};
+			_tecs.handle_alt_step(_baro_altitude, _baro_altitude_rate);
+		}
+
+		// Fixed-altitude mode is pilot-adjustable during GPSLESS NAV. The QGC
+		// altitude slider writes FW_GPSNAV_ALT and selects ALTMOD=1, so use a
+		// fresh finite value instead of retaining only the entry-time setpoint.
+		if ((_param_fw_gpsnav_alt_mode.get() == 1)
+	    && PX4_ISFINITE(_param_fw_gpsnav_alt.get())) {
+			_gpsless_nav_baro_altitude_setpoint = _param_fw_gpsnav_alt.get();
+		}
+
+		_current_altitude = _baro_altitude;
+
+	} else {
+		// Do not leave TECS running on a stale barometer or fall back to a
+		// GPS-backed altitude estimate while this explicit mode is selected.
+		_gpsless_nav_initialized = false;
+	}
+}
+
+void
+FixedwingPositionControl::control_gpsless_nav(const float control_interval)
+{
+	if (!_gpsless_nav_initialized) {
+		// This mode cannot substitute GPS when its mandatory barometric input is
+		// unavailable. Hold a benign attitude and trim throttle until barometric
+		// data is available, while reporting the invalid state in its uORB topic.
+		_att_sp.roll_body = 0.f;
+		_att_sp.pitch_body = 0.f;
+		_att_sp.yaw_body = _yaw;
+		_att_sp.thrust_body[0] = _param_fw_thr_trim.get();
+		return;
+	}
+
+	const float requested_airspeed = (_param_fw_gpsnav_aspd.get() > FLT_EPSILON) ?
+					 _param_fw_gpsnav_aspd.get() : _param_fw_airspd_trim.get();
+	const float target_airspeed = constrain(requested_airspeed, _param_fw_airspd_min.get(), _param_fw_airspd_max.get());
+	const float max_roll = radians(_param_fw_gpsnav_max_r.get());
+	const float heading_setpoint = radians(_param_fw_gpsnav_hdg.get());
+
+	// This is a heading controller, not GPS track control. Heading and yaw rate
+	// come from attitude/gyro, and the roll command makes the aircraft bank
+	// until it captures the configured direction.
+	_gpsless_nav_heading_error = wrap_pi(heading_setpoint - _yaw);
+	_att_sp.roll_body = constrain(_param_fw_gpsnav_hdg_p.get() * _gpsless_nav_heading_error
+				     - _param_fw_gpsnav_hdg_d.get() * _yawrate, -max_roll, max_roll);
+	_gpsless_nav_roll_setpoint = _att_sp.roll_body;
+	_att_sp.yaw_body = _yaw;
+
+	// GPS-less diagnostic dead reckoning: airspeed plus the measured attitude
+	// produces an air-relative NED velocity. It is intentionally not corrected
+	// by GPS, local velocity, ground speed, or wind and is not used for control.
+	const float true_airspeed = _airspeed * _eas2tas;
+	const float horizontal_airspeed = true_airspeed * cosf(_pitch);
+	_gpsless_nav_air_velocity = Vector3f{
+						horizontal_airspeed * cosf(_yaw),
+						horizontal_airspeed * sinf(_yaw),
+						-true_airspeed * sinf(_pitch)
+					};
+	_gpsless_nav_dead_reckoned_position += Vector2f{_gpsless_nav_air_velocity(0), _gpsless_nav_air_velocity(1)} * control_interval;
+
+	// Track the selected GPS-less altitude setpoint. Both the altitude and its
+	// rate passed to TECS originate from vehicle_air_data.
+	tecs_update_pitch_throttle(control_interval,
+				   _gpsless_nav_baro_altitude_setpoint,
+				   target_airspeed,
+				   radians(_param_fw_p_lim_min.get()),
+				   radians(_param_fw_p_lim_max.get()),
+				   _param_fw_thr_min.get(),
+				   _param_fw_thr_max.get(),
+				   _param_sinkrate_target.get(),
+				   _param_climbrate_target.get());
+	_att_sp.pitch_body = get_tecs_pitch();
+	_att_sp.thrust_body[0] = get_tecs_thrust();
 }
 
 bool
@@ -2873,6 +3076,10 @@ FixedwingPositionControl::gpsless_tube_launch_active()
 float
 FixedwingPositionControl::takeoff_altitude_for_tecs() const
 {
+	if (gpsless_nav_active() && gpsless_nav_baro_valid()) {
+		return _baro_altitude;
+	}
+
 	if (gpsless_tube_launch_enabled() && _gpsless_tube_launch_baro_altitude_active
 	    && PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
 	    && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)) {
@@ -2892,6 +3099,10 @@ FixedwingPositionControl::takeoff_altitude_for_tecs() const
 float
 FixedwingPositionControl::takeoff_altitude_rate_for_tecs() const
 {
+	if (gpsless_nav_active() && gpsless_nav_baro_valid()) {
+		return _baro_altitude_rate;
+	}
+
 	if (gpsless_tube_launch_enabled() && _gpsless_tube_launch_baro_altitude_active
 	    && PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
 	    && (hrt_elapsed_time(&_baro_altitude_timestamp) <= 1000000)) {
@@ -2930,6 +3141,13 @@ FixedwingPositionControl::gpsless_tube_launch_estimator_healthy() const
 void
 FixedwingPositionControl::update_gpsless_tube_launch_reference(const hrt_abstime now)
 {
+	// GPS-less NAV deliberately never hands back to a GPS/global-altitude
+	// solution. Once it owns post-takeoff control, freeze the tube-launch
+	// handover state machine so it cannot re-seed TECS from fused altitude.
+	if (gpsless_nav_active()) {
+		return;
+	}
+
 	if (!gpsless_tube_launch_enabled() || !_control_mode.flag_armed || _runway_takeoff.runwayTakeoffEnabled()) {
 		reset_gpsless_tube_launch_state();
 		return;

@@ -71,6 +71,7 @@
 #include <uORB/SubscriptionCallback.hpp>
 #include <uORB/topics/airspeed_validated.h>
 #include <uORB/topics/gps_checks.h>
+#include <uORB/topics/gpsless_nav_status.h>
 #include <uORB/topics/gpsless_takeoff_status.h>
 #include <uORB/topics/landing_gear.h>
 #include <uORB/topics/launch_detection_status.h>
@@ -105,6 +106,7 @@ using namespace time_literals;
 
 using matrix::Vector2d;
 using matrix::Vector2f;
+using matrix::Vector3f;
 
 // [m] initial distance of waypoint in front of plane in heading hold mode
 static constexpr float HDG_HOLD_DIST_NEXT = 3000.0f;
@@ -218,6 +220,7 @@ private:
 	uORB::Publication<tecs_status_s> _tecs_status_pub{ORB_ID(tecs_status)};
 	uORB::Publication<launch_detection_status_s> _launch_detection_status_pub{ORB_ID(launch_detection_status)};
 	uORB::Publication<gps_checks_s> _gps_checks_pub{ORB_ID(gps_checks)};
+	uORB::Publication<gpsless_nav_status_s> _gpsless_nav_status_pub{ORB_ID(gpsless_nav_status)};
 	uORB::Publication<gpsless_takeoff_status_s> _gpsless_takeoff_status_pub{ORB_ID(gpsless_takeoff_status)};
 	uORB::PublicationMulti<orbit_status_s> _orbit_status_pub{ORB_ID(orbit_status)};
 	uORB::Publication<landing_gear_s> _landing_gear_pub{ORB_ID(landing_gear)};
@@ -252,6 +255,7 @@ private:
 		FW_POSCTRL_MODE_AUTO_TAKEOFF,
 		FW_POSCTRL_MODE_AUTO_LANDING_STRAIGHT,
 		FW_POSCTRL_MODE_AUTO_LANDING_CIRCULAR,
+		FW_POSCTRL_MODE_GPSLESS_NAV,
 		FW_POSCTRL_MODE_MANUAL_POSITION,
 		FW_POSCTRL_MODE_MANUAL_ALTITUDE,
 		FW_POSCTRL_MODE_OTHER
@@ -295,6 +299,17 @@ private:
 	bool _gps_fallback_loiter_active{false};
 	float _gps_fallback_yaw_error{NAN};
 	float _gps_fallback_roll_setpoint{NAN};
+
+	// GPS-less NAV is an explicit Commander navigation state. Its fixed-wing
+	// controller uses only barometer, airspeed and attitude/yaw inputs; GPS
+	// remains diagnostic data and is never a control input.
+	bool _gpsless_nav_initialized{false};
+	float _gpsless_nav_baro_altitude_setpoint{NAN};
+	float _gpsless_nav_next_waypoint_altitude{NAN};
+	float _gpsless_nav_heading_error{NAN};
+	float _gpsless_nav_roll_setpoint{NAN};
+	Vector2f _gpsless_nav_dead_reckoned_position{};
+	Vector3f _gpsless_nav_air_velocity{};
 
 	float _pitch{0.0f};
 	float _yaw{0.0f};
@@ -612,6 +627,7 @@ private:
 	 * @param control_interval Time since last position control call [s]
 	 */
 	void control_auto_fixed_bank_alt_hold(const float control_interval);
+	void control_gpsless_nav(const float control_interval);
 
 	/**
 	 * @brief Control airspeed with a fixed descent rate and roll angle.
@@ -754,6 +770,11 @@ private:
 	bool gps_fallback_enabled() const;
 	void update_gps_fallback(const hrt_abstime now);
 	void apply_gps_fallback_lateral();
+	bool gpsless_nav_enabled() const;
+	bool gpsless_nav_active() const;
+	bool gpsless_nav_baro_valid() const;
+	void update_gpsless_nav();
+	void gpsless_nav_status_publish(const hrt_abstime now);
 
 	/**
 	 * @brief Decides which control mode to execute.
@@ -1094,7 +1115,16 @@ private:
 		(ParamFloat<px4::params::FW_GPSFB_YH_D>) _param_fw_gpsfb_yh_d,
 		(ParamFloat<px4::params::FW_GPSFB_MAX_R>) _param_fw_gpsfb_max_r,
 		(ParamBool<px4::params::FW_GPSFB_LTR_EN>) _param_fw_gpsfb_ltr_en,
-		(ParamFloat<px4::params::FW_GPSFB_LTR_RAD>) _param_fw_gpsfb_ltr_rad
+		(ParamFloat<px4::params::FW_GPSFB_LTR_RAD>) _param_fw_gpsfb_ltr_rad,
+
+		(ParamBool<px4::params::FW_GPSNAV_EN>) _param_fw_gpsnav_en,
+		(ParamFloat<px4::params::FW_GPSNAV_HDG>) _param_fw_gpsnav_hdg,
+		(ParamFloat<px4::params::FW_GPSNAV_HDG_P>) _param_fw_gpsnav_hdg_p,
+		(ParamFloat<px4::params::FW_GPSNAV_HDG_D>) _param_fw_gpsnav_hdg_d,
+		(ParamFloat<px4::params::FW_GPSNAV_MAX_R>) _param_fw_gpsnav_max_r,
+		(ParamFloat<px4::params::FW_GPSNAV_ASPD>) _param_fw_gpsnav_aspd,
+		(ParamInt<px4::params::FW_GPSNAV_ALTMOD>) _param_fw_gpsnav_alt_mode,
+		(ParamFloat<px4::params::FW_GPSNAV_ALT>) _param_fw_gpsnav_alt
 	)
 
 };

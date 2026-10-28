@@ -276,6 +276,7 @@ private:
 	uORB::Subscription					_system_power_sub{ORB_ID(system_power)};
 	uORB::Subscription					_vehicle_command_sub{ORB_ID(vehicle_command)};
 	uORB::Subscription					_vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
+	uORB::Subscription					_vehicle_gps_position_sub{ORB_ID(vehicle_gps_position)};
 	uORB::Subscription					_vtol_vehicle_status_sub{ORB_ID(vtol_vehicle_status)};
 
 	uORB::SubscriptionInterval				_parameter_update_sub{ORB_ID(parameter_update), 1_s};
@@ -327,6 +328,9 @@ private:
 		(ParamInt<px4::params::COM_RC_OVERRIDE>)    _param_com_rc_override,
 		(ParamInt<px4::params::COM_FLIGHT_UUID>)    _param_flight_uuid,
 		(ParamInt<px4::params::COM_TAKEOFF_ACT>)    _param_takeoff_finished_action,
+		(ParamBool<px4::params::FW_GPSNAV_EN>)      _param_fw_gpsnav_en,
+		(ParamFloat<px4::params::FW_GPSFB_EPH>)     _param_fw_gpsfb_eph,
+		(ParamFloat<px4::params::FW_GPSFB_EPV>)     _param_fw_gpsfb_epv,
 		(ParamFloat<px4::params::COM_CPU_MAX>)      _param_com_cpu_max
 	)
 };

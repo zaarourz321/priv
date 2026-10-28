@@ -42,8 +42,8 @@ uint8 NAVIGATION_STATE_POSCTL = 2               # Position control mode
 uint8 NAVIGATION_STATE_AUTO_MISSION = 3         # Auto mission mode
 uint8 NAVIGATION_STATE_AUTO_LOITER = 4          # Auto loiter mode
 uint8 NAVIGATION_STATE_AUTO_RTL = 5             # Auto return to launch mode
-uint8 NAVIGATION_STATE_UNUSED3 = 8              # Free slot
-uint8 NAVIGATION_STATE_UNUSED = 9               # Free slot
+uint8 NAVIGATION_STATE_UNUSED = 8               # Reserved for an existing custom mode
+uint8 NAVIGATION_STATE_AUTO_GPSLESS_NAV = 9     # Fixed-wing barometric altitude and heading navigation without GPS
 uint8 NAVIGATION_STATE_ACRO = 10                # Acro mode
 uint8 NAVIGATION_STATE_UNUSED1 = 11             # Free slot
 uint8 NAVIGATION_STATE_DESCEND = 12             # Descend mode (no position control)
@@ -121,4 +121,3 @@ bool rc_calibration_in_progress
 bool calibration_enabled
 
 bool pre_flight_checks_pass		# true if all checks necessary to arm pass
-

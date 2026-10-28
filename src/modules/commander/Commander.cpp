@@ -407,6 +407,10 @@ int Commander::custom_command(int argc, char *argv[])
 				send_vehicle_command(vehicle_command_s::VEHICLE_CMD_DO_SET_MODE, 1, PX4_CUSTOM_MAIN_MODE_AUTO,
 						     PX4_CUSTOM_SUB_MODE_AUTO_PRECLAND);
 
+			} else if (!strcmp(argv[1], "auto:gpsless_nav")) {
+				send_vehicle_command(vehicle_command_s::VEHICLE_CMD_DO_SET_MODE, 1, PX4_CUSTOM_MAIN_MODE_AUTO,
+						     PX4_CUSTOM_SUB_MODE_AUTO_GPSLESS_NAV);
+
 			} else {
 				PX4_ERR("argument %s unsupported.", argv[1]);
 			}
@@ -782,6 +786,10 @@ Commander::handle_command(const vehicle_command_s &cmd)
 
 						case PX4_CUSTOM_SUB_MODE_AUTO_PRECLAND:
 							desired_nav_state = vehicle_status_s::NAVIGATION_STATE_AUTO_PRECLAND;
+							break;
+
+						case PX4_CUSTOM_SUB_MODE_AUTO_GPSLESS_NAV:
+							desired_nav_state = vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV;
 							break;
 
 						default:
@@ -1890,7 +1898,27 @@ void Commander::checkForMissionUpdate()
 			if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_TAKEOFF
 			    || _vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_VTOL_TAKEOFF) {
 				// Transition mode to loiter or auto-mission after takeoff is completed.
-				if ((_param_takeoff_finished_action.get() == 1) && auto_mission_available) {
+				sensor_gps_s vehicle_gps_position{};
+				const bool gps_message_available = _vehicle_gps_position_sub.copy(&vehicle_gps_position);
+				const bool gps_healthy = gps_message_available
+							 && (vehicle_gps_position.timestamp != 0)
+							 && (hrt_elapsed_time(&vehicle_gps_position.timestamp) <= 1_s)
+							 && (vehicle_gps_position.fix_type >= 3)
+							 && PX4_ISFINITE(vehicle_gps_position.eph)
+							 && PX4_ISFINITE(vehicle_gps_position.epv)
+							 && (vehicle_gps_position.eph <= _param_fw_gpsfb_eph.get())
+							 && (vehicle_gps_position.epv <= _param_fw_gpsfb_epv.get());
+
+				if (_param_fw_gpsnav_en.get()
+				    && !gps_healthy
+				    && (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)) {
+					// GPS-less NAV is an explicit Commander state. It takes over
+					// only when raw GPS is absent or fails the existing GPS
+					// fallback health limits, and deliberately does not resume the
+					// mission laterally.
+					_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV);
+
+				} else if ((_param_takeoff_finished_action.get() == 1) && auto_mission_available) {
 					_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION);
 
 				} else {
@@ -2841,7 +2869,7 @@ The commander module contains the state machine for mode switching and failsafe 
 	PRINT_MODULE_USAGE_COMMAND("land");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("transition", "VTOL transition");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("mode", "Change flight mode");
-	PRINT_MODULE_USAGE_ARG("manual|acro|offboard|stabilized|altctl|posctl|auto:mission|auto:loiter|auto:rtl|auto:takeoff|auto:land|auto:precland",
+	PRINT_MODULE_USAGE_ARG("manual|acro|offboard|stabilized|altctl|posctl|auto:mission|auto:loiter|auto:rtl|auto:takeoff|auto:land|auto:precland|auto:gpsless_nav",
 			"Flight mode", false);
 	PRINT_MODULE_USAGE_COMMAND("pair");
 	PRINT_MODULE_USAGE_COMMAND("lockdown");

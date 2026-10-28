@@ -96,6 +96,13 @@ void getModeRequirements(uint8_t vehicle_type, failsafe_flags_s &flags)
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER, flags.mode_req_local_alt);
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER, flags.mode_req_wind_and_flight_time_compliance);
 
+	// NAVIGATION_STATE_AUTO_GPSLESS_NAV. This mode deliberately does not
+	// require global or local position: its fixed-wing controller uses only
+	// barometric altitude, attitude/yaw and airspeed.
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV, flags.mode_req_angular_velocity);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV, flags.mode_req_attitude);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV, flags.mode_req_prevent_arming);
+
 	// NAVIGATION_STATE_AUTO_RTL
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_RTL, flags.mode_req_angular_velocity);
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_RTL, flags.mode_req_attitude);
