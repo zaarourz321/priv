@@ -70,6 +70,7 @@
 #include "streams/COMPONENT_INFORMATION.hpp"
 #include "streams/COMPONENT_METADATA.hpp"
 #include "streams/DISTANCE_SENSOR.hpp"
+#include "streams/EMSAD_SENSOR_DATA.hpp"
 #include "streams/EFI_STATUS.hpp"
 #include "streams/ESC_INFO.hpp"
 #include "streams/ESC_STATUS.hpp"
@@ -393,6 +394,9 @@ static const StreamListItem streams_list[] = {
 #if defined(DISTANCE_SENSOR_HPP)
 	create_stream_list_item<MavlinkStreamDistanceSensor>(),
 #endif // DISTANCE_SENSOR_HPP
+#if defined(EMSAD_SENSOR_DATA_HPP)
+	create_stream_list_item<MavlinkStreamEmsadSensorData>(),
+#endif // EMSAD_SENSOR_DATA_HPP
 #if defined(EXTENDED_SYS_STATE_HPP)
 	create_stream_list_item<MavlinkStreamExtendedSysState>(),
 #endif // EXTENDED_SYS_STATE_HPP

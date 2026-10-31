@@ -70,6 +70,7 @@ set(msg_files
 	Ekf2Timestamps.msg
 	EscReport.msg
 	EscStatus.msg
+	Emsad.msg
 	EstimatorAidSource1d.msg
 	EstimatorAidSource2d.msg
 	EstimatorAidSource3d.msg
