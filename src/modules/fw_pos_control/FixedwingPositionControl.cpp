@@ -48,6 +48,29 @@ using matrix::Vector2d;
 using matrix::Vector3f;
 using matrix::wrap_pi;
 
+static float heading_pid_roll_setpoint(const float heading_error, const float yaw_rate, const float p_gain,
+		const float i_gain, const float d_gain, const float control_interval, const float max_roll,
+		const float integrator_limit, float &integrator)
+{
+	if (i_gain <= FLT_EPSILON || integrator_limit <= FLT_EPSILON) {
+		integrator = 0.f;
+
+	} else {
+		const float dt = constrain(control_interval, 0.001f, 0.1f);
+		const float output_without_integrator = p_gain * heading_error - d_gain * yaw_rate;
+		const float integrator_delta = i_gain * heading_error * dt;
+		const float unconstrained_output = output_without_integrator + integrator;
+
+		// Do not integrate farther into roll saturation, but allow the
+		// integrator to unwind immediately when the heading error reverses.
+		if (fabsf(unconstrained_output) < max_roll || (unconstrained_output * integrator_delta) < 0.f) {
+			integrator = constrain(integrator + integrator_delta, -integrator_limit, integrator_limit);
+		}
+	}
+
+	return constrain(p_gain * heading_error + integrator - d_gain * yaw_rate, -max_roll, max_roll);
+}
+
 FixedwingPositionControl::FixedwingPositionControl(bool vtol) :
 	ModuleParams(nullptr),
 	WorkItem(MODULE_NAME, px4::wq_configurations::nav_and_controllers),
@@ -2623,8 +2646,8 @@ FixedwingPositionControl::Run()
 		// end of AUTO takeoff until its GPS/altitude handover is complete.
 		// Do not let the independent GPS-fallback controller release or
 		// replace that heading command based on one cached GPS message.
-		if (!gpsless_nav_active() && !apply_gpsless_tube_launch_lateral()) {
-			apply_gps_fallback_lateral();
+		if (!gpsless_nav_active() && !apply_gpsless_tube_launch_lateral(control_interval)) {
+			apply_gps_fallback_lateral(control_interval);
 		}
 		gpsless_takeoff_status_publish(_local_pos.timestamp);
 		gpsless_nav_status_publish(_local_pos.timestamp);
@@ -2837,6 +2860,7 @@ FixedwingPositionControl::update_gpsless_nav()
 	if (!gpsless_nav_active()) {
 		_gpsless_nav_initialized = false;
 		_gpsless_nav_baro_altitude_setpoint = NAN;
+		_gpsless_nav_heading_integrator = 0.f;
 
 		// Keep the following mission altitude while AUTO takeoff is active.
 		// It is consumed on the first GPSLESS NAV cycle after Commander has
@@ -2870,6 +2894,7 @@ FixedwingPositionControl::update_gpsless_nav()
 			}
 			_gpsless_nav_heading_error = NAN;
 			_gpsless_nav_roll_setpoint = NAN;
+			_gpsless_nav_heading_integrator = 0.f;
 			_gpsless_nav_dead_reckoned_position = {};
 			_gpsless_nav_air_velocity = {};
 			_tecs.handle_alt_step(_baro_altitude, _baro_altitude_rate);
@@ -2889,6 +2914,7 @@ FixedwingPositionControl::update_gpsless_nav()
 		// Do not leave TECS running on a stale barometer or fall back to a
 		// GPS-backed altitude estimate while this explicit mode is selected.
 		_gpsless_nav_initialized = false;
+		_gpsless_nav_heading_integrator = 0.f;
 	}
 }
 
@@ -2916,8 +2942,10 @@ FixedwingPositionControl::control_gpsless_nav(const float control_interval)
 	// come from attitude/gyro, and the roll command makes the aircraft bank
 	// until it captures the configured direction.
 	_gpsless_nav_heading_error = wrap_pi(heading_setpoint - _yaw);
-	_att_sp.roll_body = constrain(_param_fw_gpsnav_hdg_p.get() * _gpsless_nav_heading_error
-				     - _param_fw_gpsnav_hdg_d.get() * _yawrate, -max_roll, max_roll);
+	_att_sp.roll_body = heading_pid_roll_setpoint(_gpsless_nav_heading_error, _yawrate,
+				       _param_fw_gpsnav_hdg_p.get(), _param_fw_gpsnav_hdg_i.get(),
+				       _param_fw_gpsnav_hdg_d.get(), control_interval, max_roll,
+				       radians(_param_fw_gpsnav_hdg_il.get()), _gpsless_nav_heading_integrator);
 	_gpsless_nav_roll_setpoint = _att_sp.roll_body;
 	_att_sp.yaw_body = _yaw;
 
@@ -2949,7 +2977,7 @@ FixedwingPositionControl::control_gpsless_nav(const float control_interval)
 }
 
 bool
-FixedwingPositionControl::apply_gpsless_tube_launch_lateral()
+FixedwingPositionControl::apply_gpsless_tube_launch_lateral(float control_interval)
 {
 	_gpsless_tube_launch_heading_active = false;
 	_gpsless_tube_launch_loiter_active = false;
@@ -2968,6 +2996,7 @@ FixedwingPositionControl::apply_gpsless_tube_launch_lateral()
 					 && !_gpsless_tube_launch_gps_recovered;
 
 	if (!tube_lateral_active) {
+		_gpsless_tube_launch_heading_integrator = 0.f;
 		return false;
 	}
 
@@ -2985,6 +3014,7 @@ FixedwingPositionControl::apply_gpsless_tube_launch_lateral()
 	// priority; otherwise hold the configured GPS-less heading.
 	if (_param_fw_gpsl_ltr_en.get() && (_param_fw_gpsl_ltr_rad.get() > FLT_EPSILON)
 	    && PX4_ISFINITE(_airspeed)) {
+		_gpsless_tube_launch_heading_integrator = 0.f;
 		_att_sp.roll_body = constrain(atanf((_airspeed * _airspeed)
 							     / (CONSTANTS_ONE_G * _param_fw_gpsl_ltr_rad.get())),
 						     -max_roll, max_roll);
@@ -2993,13 +3023,16 @@ FixedwingPositionControl::apply_gpsless_tube_launch_lateral()
 	} else if (_param_fw_gpsl_hdg_en.get()) {
 		_gpsless_tube_launch_heading_active = true;
 		_gpsless_tube_launch_heading_error = wrap_pi(radians(_param_fw_gpsl_hdg.get()) - _yaw);
-		_att_sp.roll_body = constrain(_param_fw_gpsl_hdg_p.get() * _gpsless_tube_launch_heading_error
-					      - _param_fw_gpsl_hdg_d.get() * _yawrate, -max_roll, max_roll);
+		_att_sp.roll_body = heading_pid_roll_setpoint(_gpsless_tube_launch_heading_error, _yawrate,
+				       _param_fw_gpsl_hdg_p.get(), _param_fw_gpsl_hdg_i.get(),
+				       _param_fw_gpsl_hdg_d.get(), control_interval, max_roll,
+				       radians(_param_fw_gpsl_hdg_il.get()), _gpsless_tube_launch_heading_integrator);
 
 	} else {
 		// Do not fall through to the generic GPS-fallback controller. It is not
 		// allowed to override the GPS-less launch state machine.
 		_att_sp.roll_body = 0.f;
+		_gpsless_tube_launch_heading_integrator = 0.f;
 	}
 
 	_gpsless_tube_launch_roll_setpoint = _att_sp.roll_body;
@@ -3008,7 +3041,7 @@ FixedwingPositionControl::apply_gpsless_tube_launch_lateral()
 }
 
 void
-FixedwingPositionControl::apply_gps_fallback_lateral()
+FixedwingPositionControl::apply_gps_fallback_lateral(float control_interval)
 {
 	_gps_fallback_yaw_hold_active = false;
 	_gps_fallback_loiter_active = false;
@@ -3023,11 +3056,13 @@ FixedwingPositionControl::apply_gps_fallback_lateral()
 
 	if (!gps_fallback_enabled() || suppress_lateral_fallback || !_control_mode.flag_armed) {
 		_gps_fallback_was_bad = false;
+		_gps_fallback_heading_integrator = 0.f;
 		return;
 	}
 
 	if (!_gps_fallback_gps_bad) {
 		_gps_fallback_was_bad = false;
+		_gps_fallback_heading_integrator = 0.f;
 		return;
 	}
 
@@ -3038,10 +3073,12 @@ FixedwingPositionControl::apply_gps_fallback_lateral()
 							|| (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_ORBIT);
 
 	if (!supported_navigation_state || (_control_mode_current == FW_POSCTRL_MODE_AUTO_TAKEOFF)) {
+		_gps_fallback_heading_integrator = 0.f;
 		return;
 	}
 
 	if (_param_fw_gpsfb_ltr_en.get()) {
+		_gps_fallback_heading_integrator = 0.f;
 		const float radius = _param_fw_gpsfb_ltr_rad.get();
 
 		if (radius > FLT_EPSILON && PX4_ISFINITE(_airspeed)) {
@@ -3053,13 +3090,19 @@ FixedwingPositionControl::apply_gps_fallback_lateral()
 	} else if (_param_fw_gpsfb_yh_en.get()) {
 		if (!_gps_fallback_was_bad || !PX4_ISFINITE(_gps_fallback_yaw_hold_ref)) {
 			_gps_fallback_yaw_hold_ref = _yaw;
+			_gps_fallback_heading_integrator = 0.f;
 		}
 
 		_gps_fallback_yaw_error = wrap_pi(_gps_fallback_yaw_hold_ref - _yaw);
-		_att_sp.roll_body = constrain(_param_fw_gpsfb_yh_p.get() * _gps_fallback_yaw_error
-					      - _param_fw_gpsfb_yh_d.get() * _yawrate, -max_roll, max_roll);
+		_att_sp.roll_body = heading_pid_roll_setpoint(_gps_fallback_yaw_error, _yawrate,
+				       _param_fw_gpsfb_yh_p.get(), _param_fw_gpsfb_yh_i.get(),
+				       _param_fw_gpsfb_yh_d.get(), control_interval, max_roll,
+				       radians(_param_fw_gpsfb_yh_il.get()), _gps_fallback_heading_integrator);
 		_gps_fallback_yaw_hold_active = true;
 		_gps_fallback_roll_setpoint = _att_sp.roll_body;
+
+	} else {
+		_gps_fallback_heading_integrator = 0.f;
 	}
 
 	_gps_fallback_was_bad = true;
@@ -3127,6 +3170,7 @@ FixedwingPositionControl::reset_gpsless_tube_launch_state()
 	_gpsless_tube_launch_loiter_active = false;
 	_gpsless_tube_launch_heading_error = NAN;
 	_gpsless_tube_launch_roll_setpoint = NAN;
+	_gpsless_tube_launch_heading_integrator = 0.f;
 }
 
 bool

@@ -299,6 +299,7 @@ private:
 	bool _gps_fallback_loiter_active{false};
 	float _gps_fallback_yaw_error{NAN};
 	float _gps_fallback_roll_setpoint{NAN};
+	float _gps_fallback_heading_integrator{0.f};
 
 	// GPS-less NAV is an explicit Commander navigation state. Its fixed-wing
 	// controller uses only barometer, airspeed and attitude/yaw inputs; GPS
@@ -308,6 +309,7 @@ private:
 	float _gpsless_nav_next_waypoint_altitude{NAN};
 	float _gpsless_nav_heading_error{NAN};
 	float _gpsless_nav_roll_setpoint{NAN};
+	float _gpsless_nav_heading_integrator{0.f};
 	Vector2f _gpsless_nav_dead_reckoned_position{};
 	Vector3f _gpsless_nav_air_velocity{};
 
@@ -391,6 +393,7 @@ private:
 	bool _gpsless_tube_launch_loiter_active{false};
 	float _gpsless_tube_launch_heading_error{NAN};
 	float _gpsless_tube_launch_roll_setpoint{NAN};
+	float _gpsless_tube_launch_heading_integrator{0.f};
 
 	// class handling runway takeoff for fixed-wing UAVs with steerable wheels
 	RunwayTakeoff _runway_takeoff;
@@ -766,10 +769,10 @@ private:
 	void update_gpsless_tube_launch_reference(const hrt_abstime now);
 	bool gpsless_tube_launch_estimator_healthy() const;
 	void reset_gpsless_tube_launch_state();
-	bool apply_gpsless_tube_launch_lateral();
+	bool apply_gpsless_tube_launch_lateral(float control_interval);
 	bool gps_fallback_enabled() const;
 	void update_gps_fallback(const hrt_abstime now);
-	void apply_gps_fallback_lateral();
+	void apply_gps_fallback_lateral(float control_interval);
 	bool gpsless_nav_enabled() const;
 	bool gpsless_nav_active() const;
 	bool gpsless_nav_baro_valid() const;
@@ -1101,6 +1104,8 @@ private:
 		(ParamBool<px4::params::FW_GPSL_HDG_EN>) _param_fw_gpsl_hdg_en,
 		(ParamFloat<px4::params::FW_GPSL_HDG>) _param_fw_gpsl_hdg,
 		(ParamFloat<px4::params::FW_GPSL_HDG_P>) _param_fw_gpsl_hdg_p,
+		(ParamFloat<px4::params::FW_GPSL_HDG_I>) _param_fw_gpsl_hdg_i,
+		(ParamFloat<px4::params::FW_GPSL_HDG_IL>) _param_fw_gpsl_hdg_il,
 		(ParamFloat<px4::params::FW_GPSL_HDG_D>) _param_fw_gpsl_hdg_d,
 		(ParamFloat<px4::params::FW_GPSL_MAX_R>) _param_fw_gpsl_max_r,
 		(ParamBool<px4::params::FW_GPSL_LTR_EN>) _param_fw_gpsl_ltr_en,
@@ -1112,6 +1117,8 @@ private:
 		(ParamFloat<px4::params::FW_GPSFB_REC_T>) _param_fw_gpsfb_rec_t,
 		(ParamBool<px4::params::FW_GPSFB_YH_EN>) _param_fw_gpsfb_yh_en,
 		(ParamFloat<px4::params::FW_GPSFB_YH_P>) _param_fw_gpsfb_yh_p,
+		(ParamFloat<px4::params::FW_GPSFB_YH_I>) _param_fw_gpsfb_yh_i,
+		(ParamFloat<px4::params::FW_GPSFB_YH_IL>) _param_fw_gpsfb_yh_il,
 		(ParamFloat<px4::params::FW_GPSFB_YH_D>) _param_fw_gpsfb_yh_d,
 		(ParamFloat<px4::params::FW_GPSFB_MAX_R>) _param_fw_gpsfb_max_r,
 		(ParamBool<px4::params::FW_GPSFB_LTR_EN>) _param_fw_gpsfb_ltr_en,
@@ -1120,6 +1127,8 @@ private:
 		(ParamBool<px4::params::FW_GPSNAV_EN>) _param_fw_gpsnav_en,
 		(ParamFloat<px4::params::FW_GPSNAV_HDG>) _param_fw_gpsnav_hdg,
 		(ParamFloat<px4::params::FW_GPSNAV_HDG_P>) _param_fw_gpsnav_hdg_p,
+		(ParamFloat<px4::params::FW_GPSNAV_HDG_I>) _param_fw_gpsnav_hdg_i,
+		(ParamFloat<px4::params::FW_GPSNAV_HDG_IL>) _param_fw_gpsnav_hdg_il,
 		(ParamFloat<px4::params::FW_GPSNAV_HDG_D>) _param_fw_gpsnav_hdg_d,
 		(ParamFloat<px4::params::FW_GPSNAV_MAX_R>) _param_fw_gpsnav_max_r,
 		(ParamFloat<px4::params::FW_GPSNAV_ASPD>) _param_fw_gpsnav_aspd,

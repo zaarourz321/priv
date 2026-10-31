@@ -1174,6 +1174,33 @@ PARAM_DEFINE_FLOAT(FW_GPSL_HDG, 0.0f);
 PARAM_DEFINE_FLOAT(FW_GPSL_HDG_P, 0.5f);
 
 /**
+ * GPS-less post-launch heading integrator gain
+ *
+ * Integrates heading error to remove a sustained heading bias. The output is
+ * limited by FW_GPSL_HDG_IL and is reset whenever this heading controller is
+ * inactive.
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_HDG_I, 0.05f);
+
+/**
+ * GPS-less post-launch heading integrator output limit
+ *
+ * @unit deg
+ * @min 0.0
+ * @max 45.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_HDG_IL, 10.0f);
+
+/**
  * GPS-less post-launch heading yaw-rate damping gain
  *
  * @min 0.0
@@ -1299,6 +1326,32 @@ PARAM_DEFINE_INT32(FW_GPSFB_YH_EN, 1);
 PARAM_DEFINE_FLOAT(FW_GPSFB_YH_P, 0.25f);
 
 /**
+ * GPS-loss heading-hold integrator gain
+ *
+ * Integrates heading error to remove a sustained heading bias. The output is
+ * limited by FW_GPSFB_YH_IL and is reset whenever heading hold is inactive.
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_YH_I, 0.05f);
+
+/**
+ * GPS-loss heading-hold integrator output limit
+ *
+ * @unit deg
+ * @min 0.0
+ * @max 45.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS Fallback
+ */
+PARAM_DEFINE_FLOAT(FW_GPSFB_YH_IL, 10.0f);
+
+/**
  * GPS-loss heading-hold yaw-rate damping gain
  *
  * Multiplies yaw rate in radians per second before it is subtracted from the
@@ -1390,6 +1443,32 @@ PARAM_DEFINE_FLOAT(FW_GPSNAV_HDG, 0.0f);
  * @group FW GPS-less NAV
  */
 PARAM_DEFINE_FLOAT(FW_GPSNAV_HDG_P, 0.5f);
+
+/**
+ * GPS-less NAV heading integrator gain
+ *
+ * Integrates heading error to remove a sustained heading bias. The output is
+ * limited by FW_GPSNAV_HDG_IL and is reset whenever GPS-less NAV is inactive.
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_FLOAT(FW_GPSNAV_HDG_I, 0.05f);
+
+/**
+ * GPS-less NAV heading integrator output limit
+ *
+ * @unit deg
+ * @min 0.0
+ * @max 45.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW GPS-less NAV
+ */
+PARAM_DEFINE_FLOAT(FW_GPSNAV_HDG_IL, 10.0f);
 
 /**
  * GPS-less NAV heading yaw-rate damping gain
