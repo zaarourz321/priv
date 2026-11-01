@@ -205,6 +205,162 @@ PARAM_DEFINE_FLOAT(FW_THR_TRIM, 0.6f);
 PARAM_DEFINE_FLOAT(FW_THR_SLEW_MAX, 0.0f);
 
 /**
+ * Enable simple longitudinal controller
+ *
+ * Replaces TECS with a lightweight airspeed-priority cascade in automatic
+ * fixed-wing flight. It uses measured airspeed for throttle and barometric or
+ * estimator altitude selected by the active navigation mode for pitch. TECS
+ * remains active for landing and whenever valid measured airspeed is absent.
+ * This parameter can be changed in flight.
+ *
+ * @boolean
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_INT32(FW_SLC_EN, 0);
+
+/**
+ * Altitude to climb-rate gain
+ *
+ * Converts altitude error to climb-rate demand for the simple longitudinal
+ * controller. Lower values give slower, smoother altitude capture.
+ *
+ * @unit 1/s
+ * @min 0.01
+ * @max 2.0
+ * @decimal 2
+ * @increment 0.01
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_ALT_P, 0.15f);
+
+/**
+ * Climb-rate to pitch proportional gain
+ *
+ * @unit rad s/m
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.01
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_HR_P, 0.20f);
+
+/**
+ * Climb-rate to pitch integrator gain
+ *
+ * @min 0.0
+ * @max 1.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_HR_I, 0.02f);
+
+/**
+ * Climb-rate pitch integrator limit
+ *
+ * @unit deg
+ * @min 0.0
+ * @max 30.0
+ * @decimal 1
+ * @increment 0.5
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_HR_IL, 8.0f);
+
+/**
+ * Climb-rate flight-path feed-forward
+ *
+ * Multiplies the geometric flight-path pitch required by the requested climb
+ * rate. One is a useful initial value.
+ *
+ * @min 0.0
+ * @max 2.0
+ * @decimal 2
+ * @increment 0.05
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_HR_FF, 1.0f);
+
+/**
+ * Airspeed to throttle proportional gain
+ *
+ * @min 0.0
+ * @max 1.0
+ * @decimal 3
+ * @increment 0.01
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_ASPD_P, 0.08f);
+
+/**
+ * Airspeed to throttle integrator gain
+ *
+ * @min 0.0
+ * @max 1.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_ASPD_I, 0.02f);
+
+/**
+ * Airspeed throttle integrator limit
+ *
+ * @unit norm
+ * @min 0.0
+ * @max 1.0
+ * @decimal 2
+ * @increment 0.01
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_ASPD_IL, 0.25f);
+
+/**
+ * Airspeed-priority deadband
+ *
+ * Above this airspeed deficit, climb demand is removed and pitch is lowered
+ * to protect airspeed.
+ *
+ * @unit m/s
+ * @min 0.0
+ * @max 10.0
+ * @decimal 2
+ * @increment 0.1
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_SPD_DB, 0.5f);
+
+/**
+ * Airspeed-priority pitch gain
+ *
+ * Additional nose-down pitch per airspeed deficit beyond FW_SLC_SPD_DB.
+ *
+ * @unit rad s/m
+ * @min 0.0
+ * @max 1.0
+ * @decimal 3
+ * @increment 0.01
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_SPD_P, 0.10f);
+
+/**
+ * Simple controller pitch slew rate
+ *
+ * Limits commanded pitch changes. Set to zero to disable this additional
+ * limiter.
+ *
+ * @unit deg/s
+ * @min 0.0
+ * @max 90.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW Simple Longitudinal
+ */
+PARAM_DEFINE_FLOAT(FW_SLC_PIT_R, 15.0f);
+
+/**
  * Minimum pitch angle
  *
  * The minimum pitch angle setpoint for a height-rate or altitude controlled mode.
@@ -1054,6 +1210,22 @@ PARAM_DEFINE_INT32(FW_GPSL_TKO_EN, 0);
  * @group FW GPS-less Launch
  */
 PARAM_DEFINE_FLOAT(FW_GPSL_TKO_ALT, 30.0f);
+
+/**
+ * GPS-less tube launch airspeed setpoint
+ *
+ * Dedicated equivalent airspeed demand during a GPS-less tube launch. Set to
+ * zero to use FW_TKO_AIRSPD, retaining the standard PX4 takeoff behavior.
+ * This applies with either TECS or the simple longitudinal controller.
+ *
+ * @unit m/s
+ * @min 0.0
+ * @max 100.0
+ * @decimal 1
+ * @increment 0.5
+ * @group FW GPS-less Launch
+ */
+PARAM_DEFINE_FLOAT(FW_GPSL_TKO_ASPD, 0.0f);
 
 /**
  * Keep barometric altitude after GPS-less takeoff

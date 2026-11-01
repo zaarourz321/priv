@@ -1490,7 +1490,9 @@ FixedwingPositionControl::control_auto_takeoff(const hrt_abstime &now, const flo
 
 	Vector2f local_2D_position{_local_pos.x, _local_pos.y};
 
-	const float takeoff_airspeed = (_param_fw_tko_airspd.get() > FLT_EPSILON) ? _param_fw_tko_airspd.get() :
+	const float configured_takeoff_airspeed = (gpsless_tube_launch && (_param_fw_gpsl_tko_aspd.get() > FLT_EPSILON)) ?
+						  _param_fw_gpsl_tko_aspd.get() : _param_fw_tko_airspd.get();
+	const float takeoff_airspeed = (configured_takeoff_airspeed > FLT_EPSILON) ? configured_takeoff_airspeed :
 				       _param_fw_airspd_min.get();
 
 	float adjusted_min_airspeed = _param_fw_airspd_min.get();
@@ -2291,6 +2293,10 @@ FixedwingPositionControl::control_manual_position(const float control_interval, 
 float
 FixedwingPositionControl::get_tecs_pitch()
 {
+	if (_simple_longitudinal_is_running && PX4_ISFINITE(_simple_longitudinal_pitch)) {
+		return _simple_longitudinal_pitch;
+	}
+
 	if (_tecs_is_running) {
 		return _tecs.get_pitch_setpoint() + radians(_param_fw_psp_off.get());
 	}
@@ -2302,12 +2308,32 @@ FixedwingPositionControl::get_tecs_pitch()
 float
 FixedwingPositionControl::get_tecs_thrust()
 {
+	if (_simple_longitudinal_is_running && PX4_ISFINITE(_simple_longitudinal_throttle)) {
+		return min(_simple_longitudinal_throttle, 1.f);
+	}
+
 	if (_tecs_is_running) {
 		return min(_tecs.get_throttle_setpoint(), 1.f);
 	}
 
 	// return 0 to prevent stale tecs state when it's not running
 	return 0.0f;
+}
+
+bool
+FixedwingPositionControl::simple_longitudinal_control_enabled() const
+{
+	// This controller intentionally requires a measured equivalent airspeed.
+	// Falling back to TECS on an invalid sensor preserves the established PX4
+	// behavior for vehicles that use synthetic airspeed.
+	return _param_fw_slc_en.get()
+	       && _control_mode.flag_control_auto_enabled
+	       && !_vehicle_status.is_vtol
+	       && (_control_mode_current != FW_POSCTRL_MODE_AUTO_LANDING_STRAIGHT)
+	       && (_control_mode_current != FW_POSCTRL_MODE_AUTO_LANDING_CIRCULAR)
+	       && _airspeed_valid
+	       && PX4_ISFINITE(_airspeed)
+	       && (_airspeed > FLT_EPSILON);
 }
 
 void
@@ -3421,6 +3447,10 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 	if (!_tecs_is_running) {
 		// next time we run TECS we should reinitialize states
 		_reinitialize_tecs = true;
+		_simple_longitudinal_control.reset();
+		_simple_longitudinal_is_running = false;
+		_simple_longitudinal_pitch = NAN;
+		_simple_longitudinal_throttle = NAN;
 		return;
 	}
 
@@ -3462,6 +3492,67 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 			pitch_min_rad = math::max(pitch_min_rad, 0.f);
 			max_sinkrate = 0.f;
 		}
+	}
+
+	const float altitude = takeoff_altitude_for_tecs();
+	const float altitude_rate = takeoff_altitude_rate_for_tecs();
+	const bool simple_controller_usable = simple_longitudinal_control_enabled()
+					      && PX4_ISFINITE(altitude) && PX4_ISFINITE(alt_sp)
+					      && PX4_ISFINITE(altitude_rate) && PX4_ISFINITE(airspeed_sp)
+					      && (throttle_max > throttle_min + FLT_EPSILON);
+
+	if (simple_controller_usable) {
+		if (!_simple_longitudinal_is_running) {
+			_simple_longitudinal_control.initialize(_att_sp.pitch_body, _att_sp.thrust_body[0]);
+		}
+
+		SimpleLongitudinalControl::Parameters parameters{};
+		parameters.altitude_p = _param_fw_slc_alt_p.get();
+		parameters.height_rate_p = _param_fw_slc_hr_p.get();
+		parameters.height_rate_i = _param_fw_slc_hr_i.get();
+		parameters.height_rate_i_limit = radians(_param_fw_slc_hr_il.get());
+		parameters.height_rate_ff = _param_fw_slc_hr_ff.get();
+		parameters.airspeed_p = _param_fw_slc_aspd_p.get();
+		parameters.airspeed_i = _param_fw_slc_aspd_i.get();
+		parameters.airspeed_i_limit = _param_fw_slc_aspd_il.get();
+		parameters.speed_error_deadband = _param_fw_slc_spd_db.get();
+		parameters.speed_pitch_p = _param_fw_slc_spd_p.get();
+		parameters.pitch_slew_rate = radians(_param_fw_slc_pit_r.get());
+		parameters.throttle_slew_rate = _param_fw_thr_slew_max.get();
+
+		SimpleLongitudinalControl::Input input{};
+		input.dt = control_interval;
+		input.altitude = altitude;
+		input.altitude_setpoint = alt_sp;
+		input.height_rate = altitude_rate;
+		input.height_rate_setpoint = hgt_rate_sp;
+		input.airspeed = _airspeed;
+		input.airspeed_setpoint = airspeed_sp;
+		input.airspeed_min = _param_fw_airspd_min.get();
+		input.pitch_min = pitch_min_rad;
+		input.pitch_max = pitch_max_rad;
+		input.throttle_min = throttle_min;
+		input.throttle_max = throttle_max;
+		input.throttle_trim = calculateTrimThrottle(throttle_min, throttle_max, airspeed_sp);
+		input.max_sink_rate = math::max(max_sinkrate, 0.f);
+		input.max_climb_rate = math::max(desired_max_climbrate, 0.f);
+		input.pitch_offset = radians(_param_fw_psp_off.get());
+
+		const SimpleLongitudinalControl::Output output = _simple_longitudinal_control.update(input, parameters);
+		_simple_longitudinal_pitch = output.pitch_setpoint;
+		_simple_longitudinal_throttle = output.throttle_setpoint;
+		_simple_longitudinal_is_running = true;
+		_tecs_is_running = false;
+		_reinitialize_tecs = true;
+		return;
+	}
+
+	if (_simple_longitudinal_is_running) {
+		_simple_longitudinal_control.reset();
+		_simple_longitudinal_is_running = false;
+		_simple_longitudinal_pitch = NAN;
+		_simple_longitudinal_throttle = NAN;
+		_reinitialize_tecs = true;
 	}
 
 	// We need an altitude lock to calculate the TECS control

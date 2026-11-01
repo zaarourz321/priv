@@ -47,6 +47,7 @@
 #ifndef FIXEDWINGPOSITIONCONTROL_HPP_
 #define FIXEDWINGPOSITIONCONTROL_HPP_
 
+#include "SimpleLongitudinalControl.hpp"
 #include "launchdetection/LaunchDetector.h"
 #include "runway_takeoff/RunwayTakeoff.h"
 
@@ -467,9 +468,13 @@ private:
 
 	// total energy control system - airspeed / altitude control
 	TECS _tecs;
+	SimpleLongitudinalControl _simple_longitudinal_control;
 
 	bool _reinitialize_tecs{true};
 	bool _tecs_is_running{false};
+	bool _simple_longitudinal_is_running{false};
+	float _simple_longitudinal_pitch{NAN};
+	float _simple_longitudinal_throttle{NAN};
 	hrt_abstime _time_last_tecs_update{0}; // [us]
 
 	// VTOL / TRANSITION
@@ -740,6 +745,7 @@ private:
 
 	float get_tecs_pitch();
 	float get_tecs_thrust();
+	bool simple_longitudinal_control_enabled() const;
 
 	float get_manual_airspeed_setpoint();
 
@@ -1049,6 +1055,19 @@ private:
 		(ParamFloat<px4::params::FW_THR_MIN>) _param_fw_thr_min,
 		(ParamFloat<px4::params::FW_THR_SLEW_MAX>) _param_fw_thr_slew_max,
 
+		(ParamBool<px4::params::FW_SLC_EN>) _param_fw_slc_en,
+		(ParamFloat<px4::params::FW_SLC_ALT_P>) _param_fw_slc_alt_p,
+		(ParamFloat<px4::params::FW_SLC_HR_P>) _param_fw_slc_hr_p,
+		(ParamFloat<px4::params::FW_SLC_HR_I>) _param_fw_slc_hr_i,
+		(ParamFloat<px4::params::FW_SLC_HR_IL>) _param_fw_slc_hr_il,
+		(ParamFloat<px4::params::FW_SLC_HR_FF>) _param_fw_slc_hr_ff,
+		(ParamFloat<px4::params::FW_SLC_ASPD_P>) _param_fw_slc_aspd_p,
+		(ParamFloat<px4::params::FW_SLC_ASPD_I>) _param_fw_slc_aspd_i,
+		(ParamFloat<px4::params::FW_SLC_ASPD_IL>) _param_fw_slc_aspd_il,
+		(ParamFloat<px4::params::FW_SLC_SPD_DB>) _param_fw_slc_spd_db,
+		(ParamFloat<px4::params::FW_SLC_SPD_P>) _param_fw_slc_spd_p,
+		(ParamFloat<px4::params::FW_SLC_PIT_R>) _param_fw_slc_pit_r,
+
 		(ParamFloat<px4::params::FW_FLAPS_LND_SCL>) _param_fw_flaps_lnd_scl,
 		(ParamFloat<px4::params::FW_FLAPS_TO_SCL>) _param_fw_flaps_to_scl,
 		(ParamFloat<px4::params::FW_SPOILERS_LND>) _param_fw_spoilers_lnd,
@@ -1095,6 +1114,7 @@ private:
 		(ParamBool<px4::params::FW_LAUN_DETCN_ON>) _param_fw_laun_detcn_on,
 		(ParamBool<px4::params::FW_GPSL_TKO_EN>) _param_fw_gpsl_tko_en,
 		(ParamFloat<px4::params::FW_GPSL_TKO_ALT>) _param_fw_gpsl_tko_alt,
+		(ParamFloat<px4::params::FW_GPSL_TKO_ASPD>) _param_fw_gpsl_tko_aspd,
 		(ParamBool<px4::params::FW_GPSL_POST_EN>) _param_fw_gpsl_post_en,
 		(ParamFloat<px4::params::FW_GPSL_HOLD_T>) _param_fw_gpsl_hold_t,
 		(ParamFloat<px4::params::FW_GPSL_GPS_T>) _param_fw_gpsl_gps_t,
