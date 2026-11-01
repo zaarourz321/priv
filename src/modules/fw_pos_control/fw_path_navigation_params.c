@@ -750,6 +750,84 @@ PARAM_DEFINE_FLOAT(FW_T_I_GAIN_PIT, 0.1f);
 PARAM_DEFINE_FLOAT(FW_T_VERT_ACC, 7.0f);
 
 /**
+ * TECS response scale
+ *
+ * Scales the aggressiveness of the TECS altitude and airspeed loops. Values
+ * below one increase the altitude and airspeed time constants while reducing
+ * pitch/throttle integrator action and vertical acceleration. Use this for a
+ * slower, better-damped response on tandem or highly responsive airframes.
+ * One retains standard PX4 behavior.
+ *
+ * @min 0.1
+ * @max 1.0
+ * @decimal 2
+ * @increment 0.05
+ * @group FW TECS Stability
+ */
+PARAM_DEFINE_FLOAT(FW_T_RESP, 1.0f);
+
+/**
+ * High-speed TECS derating start speed
+ *
+ * Above this calibrated airspeed, TECS response is smoothly reduced toward
+ * FW_T_HRESP at FW_AIRSPD_MAX. Set to zero to disable speed scheduling.
+ *
+ * @unit m/s
+ * @min 0.0
+ * @max 100.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW TECS Stability
+ */
+PARAM_DEFINE_FLOAT(FW_T_HSPD, 0.0f);
+
+/**
+ * High-speed TECS response factor
+ *
+ * Multiplier applied to FW_T_RESP at FW_AIRSPD_MAX when FW_T_HSPD is active.
+ * A value below one makes TECS progressively less aggressive at high speed.
+ *
+ * @min 0.1
+ * @max 1.0
+ * @decimal 2
+ * @increment 0.05
+ * @group FW TECS Stability
+ */
+PARAM_DEFINE_FLOAT(FW_T_HRESP, 1.0f);
+
+/**
+ * Pitch-rate damping gain
+ *
+ * Applies direct feedback of measured body pitch rate to the TECS pitch
+ * command. This adds damping when the low-level pitch loop tracks correctly
+ * but the TECS pitch command oscillates. Set to zero to disable.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 2.0
+ * @decimal 3
+ * @increment 0.01
+ * @group FW TECS Stability
+ */
+PARAM_DEFINE_FLOAT(FW_T_PRATE_D, 0.0f);
+
+/**
+ * Altitude-reference maximum jerk
+ *
+ * Limits how abruptly TECS changes its internal climb-rate reference. Lower
+ * values smooth altitude-setpoint changes and reduce excitation of flexible
+ * or highly responsive airframes. The default preserves existing behavior.
+ *
+ * @unit m/s^3
+ * @min 0.1
+ * @max 1000.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW TECS Stability
+ */
+PARAM_DEFINE_FLOAT(FW_T_JERK_MAX, 1000.0f);
+
+/**
  * Airspeed measurement standard deviation for airspeed filter.
  *
  * This is the measurement standard deviation for the airspeed used in the airspeed filter in TECS.

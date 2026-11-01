@@ -493,7 +493,8 @@ float TECSControl::_calcPitchControlOutput(const Input &input, const ControlValu
 	// a) The climb angle follows pitch angle with a lag that is small enough not to destabilise the control loop.
 	// b) The offset between climb angle and pitch angle (angle of attack) is constant, excluding the effect of
 	// pitch transients due to control action or turbulence.
-	const float pitch_setpoint_unc = SEB_rate_correction / climb_angle_to_SEB_rate + _pitch_integ_state;
+	const float pitch_setpoint_unc = SEB_rate_correction / climb_angle_to_SEB_rate + _pitch_integ_state
+					   - param.pitch_rate_damping_gain * input.pitch_rate;
 
 	return constrain(pitch_setpoint_unc, param.pitch_min, param.pitch_max);
 }
@@ -674,7 +675,8 @@ void TECS::initialize(const float altitude, const float altitude_rate, const flo
 	const TECSControl::Input control_input{ .altitude = altitude,
 						.altitude_rate = altitude_rate,
 						.tas = eas_to_tas * equivalent_airspeed,
-						.tas_rate = 0.0f};
+						.tas_rate = 0.0f,
+						.pitch_rate = 0.0f};
 
 	_control.initialize(control_setpoint, control_input, _control_param, _control_flag);
 
@@ -689,7 +691,7 @@ void TECS::initialize(const float altitude, const float altitude_rate, const flo
 	_update_timestamp = hrt_absolute_time();
 }
 
-void TECS::update(float pitch, float altitude, float hgt_setpoint, float EAS_setpoint, float equivalent_airspeed,
+void TECS::update(float pitch, float pitch_rate, float altitude, float hgt_setpoint, float EAS_setpoint, float equivalent_airspeed,
 		  float eas_to_tas, float throttle_min, float throttle_setpoint_max,
 		  float throttle_trim, float throttle_trim_adjusted, float pitch_limit_min, float pitch_limit_max, float target_climbrate,
 		  float target_sinkrate, const float speed_deriv_forward, float hgt_rate, float hgt_rate_sp)
@@ -747,7 +749,8 @@ void TECS::update(float pitch, float altitude, float hgt_setpoint, float EAS_set
 		const TECSControl::Input control_input{ .altitude = altitude,
 							.altitude_rate = hgt_rate,
 							.tas = eas_to_tas * eas.speed,
-							.tas_rate = eas_to_tas * eas.speed_rate};
+							.tas_rate = eas_to_tas * eas.speed_rate,
+							.pitch_rate = pitch_rate};
 
 		_control.update(dt, control_setpoint, control_input, _control_param, _control_flag);
 

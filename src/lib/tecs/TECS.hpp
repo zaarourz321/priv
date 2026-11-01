@@ -226,6 +226,7 @@ public:
 		float pitch_speed_weight;				///< Speed control weighting used by pitch demand calculation.
 		float integrator_gain_pitch;				///< Integrator gain used by the pitch demand calculation.
 		float pitch_damping_gain;				///< Damping gain of the pitch demand calculation [s].
+		float pitch_rate_damping_gain;			///< Direct pitch-rate feedback gain [s].
 
 		// Throttle control param
 		float integrator_gain_throttle;				///< Integrator gain used by the throttle demand calculation.
@@ -270,6 +271,7 @@ public:
 		float altitude_rate;	///< Current altitude rate of the UAS [m/s].
 		float tas;		///< Current true airspeed of the UAS [m/s].
 		float tas_rate;		///< Current true airspeed rate of the UAS [m/s²].
+		float pitch_rate;	///< Current body pitch rate of the UAS [rad/s].
 	};
 
 	/**
@@ -584,7 +586,7 @@ public:
 	 * @brief Update the control loop calculations
 	 *
 	 */
-	void update(float pitch, float altitude, float hgt_setpoint, float EAS_setpoint, float equivalent_airspeed,
+	void update(float pitch, float pitch_rate, float altitude, float hgt_setpoint, float EAS_setpoint, float equivalent_airspeed,
 		    float eas_to_tas, float throttle_min, float throttle_setpoint_max,
 		    float throttle_trim, float throttle_trim_adjusted, float pitch_limit_min, float pitch_limit_max, float target_climbrate,
 		    float target_sinkrate, float speed_deriv_forward, float hgt_rate, float hgt_rate_sp = NAN);
@@ -607,25 +609,28 @@ public:
 	void set_airspeed_rate_measurement_std_dev(float std_dev) {_airspeed_filter_param.airspeed_rate_measurement_std_dev = std_dev;};
 	void set_airspeed_filter_process_std_dev(float std_dev) {_airspeed_filter_param.airspeed_rate_noise_std_dev = std_dev;};
 
-	void set_integrator_gain_throttle(float gain) { _control_param.integrator_gain_throttle = gain;};
-	void set_integrator_gain_pitch(float gain) { _control_param.integrator_gain_pitch = gain; };
+	void set_integrator_gain_throttle(float gain) { _integrator_gain_throttle = gain; _apply_response_scale(); };
+	void set_integrator_gain_pitch(float gain) { _integrator_gain_pitch = gain; _apply_response_scale(); };
 
 	void set_max_sink_rate(float max_sink_rate) { _control_param.max_sink_rate = max_sink_rate; _reference_param.max_sink_rate = max_sink_rate; };
 	void set_min_sink_rate(float min_sink_rate) { _control_param.min_sink_rate = min_sink_rate; };
 	void set_max_climb_rate(float climb_rate) { _control_param.max_climb_rate = climb_rate; _reference_param.max_climb_rate = climb_rate; };
 
 	void set_altitude_rate_ff(float altitude_rate_ff) { _control_param.altitude_setpoint_gain_ff = altitude_rate_ff; };
-	void set_altitude_error_time_constant(float time_const) { _control_param.altitude_error_gain = 1.0f / math::max(time_const, 0.1f);; };
+	void set_altitude_error_time_constant(float time_const) { _altitude_error_time_constant = time_const; _apply_response_scale(); };
 
 	void set_equivalent_airspeed_max(float airspeed) { _equivalent_airspeed_max = airspeed; }
 	void set_equivalent_airspeed_min(float airspeed) { _equivalent_airspeed_min = airspeed; }
 	void set_equivalent_airspeed_trim(float airspeed) { _control_param.equivalent_airspeed_trim = airspeed; _airspeed_filter_param.equivalent_airspeed_trim = airspeed; }
 
 	void set_pitch_damping(float damping) { _control_param.pitch_damping_gain = damping; }
-	void set_vertical_accel_limit(float limit) { _reference_param.vert_accel_limit = limit; _control_param.vert_accel_limit = limit; };
+	void set_pitch_rate_damping(float damping) { _control_param.pitch_rate_damping_gain = damping; }
+	void set_vertical_accel_limit(float limit) { _vertical_accel_limit = limit; _apply_response_scale(); };
+	void set_vertical_jerk_limit(float limit) { _reference_param.jerk_max = limit; };
+	void set_response_scale(float scale) { _response_scale = math::constrain(scale, 0.1f, 1.f); _apply_response_scale(); };
 
 	void set_speed_weight(float weight) { _control_param.pitch_speed_weight = weight; };
-	void set_airspeed_error_time_constant(float time_const) { _control_param.airspeed_error_gain = 1.0f / math::max(time_const, 0.1f); };
+	void set_airspeed_error_time_constant(float time_const) { _airspeed_error_time_constant = time_const; _apply_response_scale(); };
 
 	void set_throttle_damp(float throttle_damp) { _control_param.throttle_damping_gain = throttle_damp; };
 	void set_throttle_slewrate(float slewrate) { _control_param.throttle_slewrate = slewrate; };
@@ -659,6 +664,16 @@ public:
 	ECL_TECS_MODE tecs_mode() { return _tecs_mode; }
 
 private:
+	void _apply_response_scale()
+	{
+		_control_param.altitude_error_gain = _response_scale / math::max(_altitude_error_time_constant, 0.1f);
+		_control_param.airspeed_error_gain = _response_scale / math::max(_airspeed_error_time_constant, 0.1f);
+		_control_param.integrator_gain_pitch = _integrator_gain_pitch * _response_scale;
+		_control_param.integrator_gain_throttle = _integrator_gain_throttle * _response_scale;
+		_reference_param.vert_accel_limit = _vertical_accel_limit * _response_scale;
+		_control_param.vert_accel_limit = _vertical_accel_limit * _response_scale;
+	}
+
 	TECSControl 			_control;			///< Control submodule.
 	TECSAirspeedFilter 		_airspeed_filter;		///< Airspeed filter submodule.
 	TECSAltitudeReferenceModel 	_altitude_reference_model;	///< Setpoint reference model submodule.
@@ -669,6 +684,12 @@ private:
 
 	float _equivalent_airspeed_min{3.0f};				///< equivalent airspeed demand lower limit (m/sec)
 	float _equivalent_airspeed_max{30.0f};				///< equivalent airspeed demand upper limit (m/sec)
+	float _response_scale{1.f};
+	float _altitude_error_time_constant{5.f};
+	float _airspeed_error_time_constant{5.f};
+	float _integrator_gain_pitch{0.f};
+	float _integrator_gain_throttle{0.f};
+	float _vertical_accel_limit{0.f};
 
 	static constexpr float DT_MIN = 0.001f;				///< minimum allowed value of _dt (sec)
 	static constexpr float DT_MAX = 1.0f;				///< max value of _dt allowed before a filter state reset is performed (sec)
@@ -715,6 +736,7 @@ private:
 		.pitch_speed_weight = 1.0f,
 		.integrator_gain_pitch = 0.0f,
 		.pitch_damping_gain = 0.0f,
+		.pitch_rate_damping_gain = 0.0f,
 		.integrator_gain_throttle = 0.0f,
 		.throttle_damping_gain = 0.0f,
 		.throttle_slewrate = 0.0f,

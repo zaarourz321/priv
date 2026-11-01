@@ -161,6 +161,9 @@ FixedwingPositionControl::parameters_update()
 	_tecs.set_integrator_gain_pitch(_param_fw_t_I_gain_pit.get());
 	_tecs.set_throttle_slewrate(_param_fw_thr_slew_max.get());
 	_tecs.set_vertical_accel_limit(_param_fw_t_vert_acc.get());
+	_tecs.set_response_scale(_param_fw_t_resp.get());
+	_tecs.set_pitch_rate_damping(_param_fw_t_prate_d.get());
+	_tecs.set_vertical_jerk_limit(_param_fw_t_jerk_max.get());
 	_tecs.set_roll_throttle_compensation(_param_fw_t_rll2thr.get());
 	_tecs.set_pitch_damping(_param_fw_t_ptch_damp.get());
 	_tecs.set_altitude_error_time_constant(_param_fw_t_h_error_tc.get());
@@ -378,6 +381,7 @@ FixedwingPositionControl::vehicle_attitude_poll()
 		vehicle_angular_velocity_s angular_velocity{};
 		_vehicle_angular_velocity_sub.copy(&angular_velocity);
 		const Vector3f rates{angular_velocity.xyz};
+		_pitchrate = PX4_ISFINITE(rates(1)) ? rates(1) : 0.f;
 
 		Dcmf R{Quatf(att.q)};
 
@@ -3580,7 +3584,21 @@ FixedwingPositionControl::tecs_update_pitch_throttle(const float control_interva
 	// when flying tight turns. It's in this case much safer to just set the estimated airspeed rate to 0.
 	const float airspeed_rate_estimate = 0.f;
 
+	// Tandem and fast airframes can have much more pitch authority at the high
+	// end of their speed range. Optionally reduce TECS response continuously
+	// above FW_T_HSPD without changing the tuned low-speed response.
+	float tecs_response_scale = _param_fw_t_resp.get();
+
+	if ((_param_fw_t_hspd.get() > FLT_EPSILON) && (_airspeed > _param_fw_t_hspd.get())) {
+		const float speed_range = math::max(_param_fw_airspd_max.get() - _param_fw_t_hspd.get(), FLT_EPSILON);
+		const float high_speed_fraction = math::constrain((_airspeed - _param_fw_t_hspd.get()) / speed_range, 0.f, 1.f);
+		tecs_response_scale *= 1.f + high_speed_fraction * (_param_fw_t_hresp.get() - 1.f);
+	}
+
+	_tecs.set_response_scale(tecs_response_scale);
+
 	_tecs.update(_pitch - radians(_param_fw_psp_off.get()),
+		     _pitchrate,
 		     takeoff_altitude_for_tecs(),
 		     alt_sp,
 		     airspeed_sp,
