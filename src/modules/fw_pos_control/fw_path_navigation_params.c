@@ -1809,7 +1809,8 @@ PARAM_DEFINE_FLOAT(FW_REC_TIME, 2.0f);
 /**
  * Recovery final pitch angle
  *
- * Target pitch commanded before Recovery returns to Mission. Positive values
+ * Target pitch commanded before Recovery exits to the mode selected by
+ * FW_REC_EXIT_MODE. Positive values
  * pitch the fixed-wing aircraft up.
  *
  * @unit deg
@@ -1881,6 +1882,23 @@ PARAM_DEFINE_FLOAT(FW_REC_AUTO_T, 0.0f);
  * @group FW Recovery
  */
 PARAM_DEFINE_FLOAT(FW_REC_LOAD_MAX, 3.0f);
+
+/**
+ * Recovery exit mode
+ *
+ * Selects the flight mode requested after Recovery reaches its configured
+ * final pitch. Hold requests AUTO Loiter at the recovery exit position.
+ *
+ * @min 0
+ * @max 4
+ * @value 0 Mission
+ * @value 1 GPS-less NAV
+ * @value 2 Position
+ * @value 3 Altitude
+ * @value 4 Hold
+ * @group FW Recovery
+ */
+PARAM_DEFINE_INT32(FW_REC_EXIT_MODE, 0);
 
 /**
  * Flaps setting during take-off

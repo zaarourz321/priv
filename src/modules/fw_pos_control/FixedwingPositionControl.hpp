@@ -327,7 +327,7 @@ private:
 	bool _recovery_auto_trigger_pending{false};
 	hrt_abstime _recovery_auto_trigger_start{0};
 	bool _recovery_initialized{false};
-	bool _recovery_mission_request_sent{false};
+	bool _recovery_exit_request_sent{false};
 	hrt_abstime _recovery_start_time{0};
 	float _recovery_initial_pitch{NAN};
 	float _recovery_pitch_setpoint{NAN};
@@ -809,7 +809,7 @@ private:
 	bool recovery_active() const;
 	void update_recovery_trigger();
 	void request_recovery_mode();
-	void request_recovery_mission();
+	void request_recovery_exit_mode();
 	bool gpsless_nav_baro_valid() const;
 	void update_gpsless_nav();
 	void gpsless_nav_status_publish(const hrt_abstime now);
@@ -1059,6 +1059,7 @@ private:
 		(ParamBool<px4::params::FW_REC_AUTO_EN>) _param_fw_rec_auto_en,
 		(ParamFloat<px4::params::FW_REC_AUTO_T>) _param_fw_rec_auto_t,
 		(ParamFloat<px4::params::FW_REC_LOAD_MAX>) _param_fw_rec_load_max,
+		(ParamInt<px4::params::FW_REC_EXIT_MODE>) _param_fw_rec_exit_mode,
 
 		(ParamFloat<px4::params::FW_T_CLMB_MAX>) _param_fw_t_clmb_max,
 		(ParamFloat<px4::params::FW_T_HRATE_FF>) _param_fw_t_hrate_ff,
@@ -1152,6 +1153,7 @@ private:
 
 		(ParamFloat<px4::params::RWTO_PSP>) _param_rwto_psp,
 		(ParamBool<px4::params::FW_LAUN_DETCN_ON>) _param_fw_laun_detcn_on,
+		(ParamInt<px4::params::FW_LAUN_THR_MODE>) _param_fw_laun_thr_mode,
 		(ParamBool<px4::params::FW_GPSL_TKO_EN>) _param_fw_gpsl_tko_en,
 		(ParamFloat<px4::params::FW_GPSL_TKO_ALT>) _param_fw_gpsl_tko_alt,
 		(ParamFloat<px4::params::FW_GPSL_TKO_ASPD>) _param_fw_gpsl_tko_aspd,

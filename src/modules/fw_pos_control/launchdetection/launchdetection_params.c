@@ -79,3 +79,18 @@ PARAM_DEFINE_FLOAT(FW_LAUN_AC_T, 0.05f);
  * @group FW Launch detection
  */
 PARAM_DEFINE_FLOAT(FW_LAUN_MOT_DEL, 0.0f);
+
+/**
+ * Launch takeoff throttle mode
+ *
+ * Selects the throttle command once launch is detected and the motor delay
+ * has elapsed. TECS continues to calculate pitch in both modes. The full
+ * throttle option holds FW_THR_MAX until the AUTO takeoff sequence ends.
+ *
+ * @min 0
+ * @max 1
+ * @value 0 TECS thrust (default)
+ * @value 1 Full throttle (FW_THR_MAX)
+ * @group FW Launch detection
+ */
+PARAM_DEFINE_INT32(FW_LAUN_THR_MODE, 0);

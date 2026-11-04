@@ -1700,7 +1700,11 @@ FixedwingPositionControl::control_auto_takeoff(const hrt_abstime &now, const flo
 				_att_sp.thrust_body[0] = _param_fw_thr_idle.get();
 
 			} else {
-				_att_sp.thrust_body[0] = (_landed) ? min(_param_fw_thr_idle.get(), 1.f) : get_tecs_thrust();
+				// After the launch detector's motor delay, optionally hold full
+				// throttle for the remaining AUTO takeoff sequence. Pitch is still
+				// calculated by TECS above in both throttle modes.
+				_att_sp.thrust_body[0] = (_param_fw_laun_thr_mode.get() == 1) ?
+						  _param_fw_thr_max.get() : ((_landed) ? min(_param_fw_thr_idle.get(), 1.f) : get_tecs_thrust());
 			}
 
 			_att_sp.pitch_body = get_tecs_pitch();
@@ -2548,7 +2552,7 @@ FixedwingPositionControl::Run()
 
 		if (!recovery_active()) {
 			_recovery_initialized = false;
-			_recovery_mission_request_sent = false;
+			_recovery_exit_request_sent = false;
 		}
 
 		update_gps_fallback(_local_pos.timestamp);
@@ -2912,12 +2916,14 @@ void
 FixedwingPositionControl::update_recovery_trigger()
 {
 	const hrt_abstime now = hrt_absolute_time();
+	const bool manual_or_stabilized = (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL)
+					  || (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STAB);
 	pn_s pn{};
 
 	if (_pn_sub.update(&pn)) {
 		const bool dive_flag = pn.dive_flag != 0;
 
-		if (_pn_received && _pn_dive_flag && !dive_flag && _param_fw_rec_auto_en.get()) {
+		if (_pn_received && _pn_dive_flag && !dive_flag && _param_fw_rec_auto_en.get() && !manual_or_stabilized) {
 			_recovery_auto_trigger_pending = true;
 			_recovery_auto_trigger_start = now;
 
@@ -2930,7 +2936,9 @@ FixedwingPositionControl::update_recovery_trigger()
 		_pn_received = true;
 	}
 
-	if (!_param_fw_rec_auto_en.get() || recovery_active() || _pn_dive_flag) {
+	// Pilot-selected Manual and Stabilized modes always take priority over an
+	// automatic Recovery request, including a request waiting out its delay.
+	if (!_param_fw_rec_auto_en.get() || recovery_active() || _pn_dive_flag || manual_or_stabilized) {
 		_recovery_auto_trigger_pending = false;
 
 	} else if (_recovery_auto_trigger_pending
@@ -2963,17 +2971,42 @@ FixedwingPositionControl::request_recovery_mode()
 }
 
 void
-FixedwingPositionControl::request_recovery_mission()
+FixedwingPositionControl::request_recovery_exit_mode()
 {
-	if (_recovery_mission_request_sent) {
+	if (_recovery_exit_request_sent) {
 		return;
 	}
 
 	vehicle_command_s command{};
 	command.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
 	command.param1 = 1.f; // MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
-	command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_AUTO);
-	command.param3 = static_cast<float>(PX4_CUSTOM_SUB_MODE_AUTO_MISSION);
+
+	switch (_param_fw_rec_exit_mode.get()) {
+	case 1:
+		command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_AUTO);
+		command.param3 = static_cast<float>(PX4_CUSTOM_SUB_MODE_AUTO_GPSLESS_NAV);
+		break;
+
+	case 2:
+		command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_POSCTL);
+		break;
+
+	case 3:
+		command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_ALTCTL);
+		break;
+
+	case 4:
+		command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_AUTO);
+		command.param3 = static_cast<float>(PX4_CUSTOM_SUB_MODE_AUTO_LOITER);
+		break;
+
+	case 0:
+	default:
+		command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_AUTO);
+		command.param3 = static_cast<float>(PX4_CUSTOM_SUB_MODE_AUTO_MISSION);
+		break;
+	}
+
 	command.target_system = _vehicle_status.system_id;
 	command.target_component = 1;
 	command.source_system = _vehicle_status.system_id;
@@ -2981,7 +3014,7 @@ FixedwingPositionControl::request_recovery_mission()
 	command.from_external = false;
 	command.timestamp = hrt_absolute_time();
 	_vehicle_command_pub.publish(command);
-	_recovery_mission_request_sent = true;
+	_recovery_exit_request_sent = true;
 }
 
 bool
@@ -3140,7 +3173,7 @@ FixedwingPositionControl::control_recovery(const float control_interval)
 		}
 
 		_recovery_initialized = true;
-		_recovery_mission_request_sent = false;
+		_recovery_exit_request_sent = false;
 		_recovery_start_time = hrt_absolute_time();
 		_recovery_initial_pitch = constrain(entry_pitch, min_pitch, max_pitch);
 		_recovery_pitch_setpoint = _recovery_initial_pitch;
@@ -3195,7 +3228,7 @@ FixedwingPositionControl::control_recovery(const float control_interval)
 	_att_sp.thrust_body[0] = _recovery_throttle_setpoint;
 
 	if ((progress >= 1.f) && (fabsf(_recovery_pitch_setpoint - final_pitch) <= radians(0.05f))) {
-		request_recovery_mission();
+		request_recovery_exit_mode();
 	}
 }
 
