@@ -399,6 +399,7 @@ FixedwingPositionControl::vehicle_attitude_poll()
 		}
 
 		const Eulerf euler_angles(R);
+		_roll = euler_angles(0);
 		_pitch = euler_angles(1);
 		_yaw = euler_angles(2);
 
@@ -2910,32 +2911,55 @@ FixedwingPositionControl::recovery_active() const
 void
 FixedwingPositionControl::update_recovery_trigger()
 {
+	const hrt_abstime now = hrt_absolute_time();
 	pn_s pn{};
 
 	if (_pn_sub.update(&pn)) {
 		const bool dive_flag = pn.dive_flag != 0;
 
-		if (_pn_received && _pn_dive_flag && !dive_flag
-		    && (_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED)
-		    && !_landed
-		    && (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)
-		    && !recovery_active()) {
-			vehicle_command_s command{};
-			command.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
-			command.param1 = 1.f; // MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
-			command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_RECOVERY);
-			command.target_system = _vehicle_status.system_id;
-			command.target_component = 1;
-			command.source_system = _vehicle_status.system_id;
-			command.source_component = 1;
-			command.from_external = false;
-			command.timestamp = hrt_absolute_time();
-			_vehicle_command_pub.publish(command);
+		if (_pn_received && _pn_dive_flag && !dive_flag && _param_fw_rec_auto_en.get()) {
+			_recovery_auto_trigger_pending = true;
+			_recovery_auto_trigger_start = now;
+
+		} else if (dive_flag) {
+			// A new dive cancels a pending recovery confirmation interval.
+			_recovery_auto_trigger_pending = false;
 		}
 
 		_pn_dive_flag = dive_flag;
 		_pn_received = true;
 	}
+
+	if (!_param_fw_rec_auto_en.get() || recovery_active() || _pn_dive_flag) {
+		_recovery_auto_trigger_pending = false;
+
+	} else if (_recovery_auto_trigger_pending
+		   && (hrt_elapsed_time(&_recovery_auto_trigger_start) >= static_cast<hrt_abstime>(
+			   max(_param_fw_rec_auto_t.get(), 0.f) * 1e6f))) {
+		if ((_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED)
+		    && !_landed
+		    && (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)) {
+			request_recovery_mode();
+		}
+
+		_recovery_auto_trigger_pending = false;
+	}
+}
+
+void
+FixedwingPositionControl::request_recovery_mode()
+{
+	vehicle_command_s command{};
+	command.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
+	command.param1 = 1.f; // MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+	command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_RECOVERY);
+	command.target_system = _vehicle_status.system_id;
+	command.target_component = 1;
+	command.source_system = _vehicle_status.system_id;
+	command.source_component = 1;
+	command.from_external = false;
+	command.timestamp = hrt_absolute_time();
+	_vehicle_command_pub.publish(command);
 }
 
 void
@@ -3094,17 +3118,53 @@ FixedwingPositionControl::control_recovery(const float control_interval)
 {
 	const float min_pitch = radians(_param_fw_p_lim_min.get());
 	const float max_pitch = radians(_param_fw_p_lim_max.get());
+	const bool just_initialized = !_recovery_initialized;
 
-	if (!_recovery_initialized) {
+	if (just_initialized) {
+		// Recovery can be entered between normal attitude updates. Use a fresh
+		// copy so the first published pitch setpoint equals measured pitch.
+		vehicle_attitude_s attitude{};
+		float entry_pitch = _pitch;
+		float entry_yaw = _yaw;
+
+		if (_vehicle_attitude_sub.copy(&attitude)) {
+			Dcmf R{Quatf(attitude.q)};
+
+			if (_vehicle_status.is_vtol_tailsitter) {
+				R = R * Dcmf{Eulerf{0.f, M_PI_2_F, 0.f}};
+			}
+
+			const Eulerf entry_euler(R);
+			entry_pitch = entry_euler(1);
+			entry_yaw = entry_euler(2);
+		}
+
 		_recovery_initialized = true;
 		_recovery_mission_request_sent = false;
 		_recovery_start_time = hrt_absolute_time();
-		_recovery_initial_pitch = constrain(_pitch, min_pitch, max_pitch);
+		_recovery_initial_pitch = constrain(entry_pitch, min_pitch, max_pitch);
 		_recovery_pitch_setpoint = _recovery_initial_pitch;
-		_recovery_yaw_setpoint = _yaw;
+		_recovery_yaw_setpoint = entry_yaw;
 		_recovery_throttle_setpoint = PX4_ISFINITE(_att_sp.thrust_body[0]) ?
 						  constrain(_att_sp.thrust_body[0], _param_fw_thr_min.get(), _param_fw_thr_max.get()) :
 						  _param_fw_thr_trim.get();
+	}
+
+	if (just_initialized) {
+		_att_sp.roll_body = 0.f;
+		_att_sp.pitch_body = _recovery_pitch_setpoint;
+		_att_sp.yaw_body = _recovery_yaw_setpoint;
+		_att_sp.thrust_body[0] = _recovery_throttle_setpoint;
+		return;
+	}
+
+	vehicle_acceleration_s acceleration{};
+
+	if (_vehicle_acceleration_sub.update(&acceleration) && PX4_ISFINITE(acceleration.xyz[2])) {
+		// vehicle_acceleration is FRD specific force including gravity: level
+		// one-g flight is approximately -CONSTANTS_ONE_G on body Z.
+		_recovery_normal_load = max(-acceleration.xyz[2] / CONSTANTS_ONE_G, 0.f);
+		_recovery_normal_load_timestamp = acceleration.timestamp;
 	}
 
 	const float transition_time = max(_param_fw_rec_time.get(), 0.1f);
@@ -3112,10 +3172,19 @@ FixedwingPositionControl::control_recovery(const float control_interval)
 	const float progress = constrain(elapsed / transition_time, 0.f, 1.f);
 	const float final_pitch = constrain(radians(_param_fw_rec_pitch.get()), min_pitch, max_pitch);
 	const float time_target = _recovery_initial_pitch + progress * (final_pitch - _recovery_initial_pitch);
-	const float max_pitch_step = radians(max(_param_fw_rec_pitch_rate.get(), 0.1f))
-				       * constrain(control_interval, 0.001f, 0.1f);
+	const float dt = constrain(control_interval, 0.001f, 0.1f);
+	const float configured_pitch_rate = radians(max(_param_fw_rec_pitch_rate.get(), 0.1f));
+	const float bank_load = 1.f / max(fabsf(cosf(_roll)), 0.2f);
+	const bool normal_load_fresh = (_recovery_normal_load_timestamp != 0)
+					       && (hrt_elapsed_time(&_recovery_normal_load_timestamp) <= 100_ms);
+	const float current_load = normal_load_fresh ? max(bank_load, _recovery_normal_load) : bank_load;
+	const float load_limit = max(_param_fw_rec_load_max.get(), 1.f);
+	const float true_airspeed = max(_airspeed * _eas2tas, 1.f);
+	const float load_limited_pitch_up_rate = max((load_limit - current_load) * CONSTANTS_ONE_G / true_airspeed, 0.f);
+	const float max_pitch_up_step = min(configured_pitch_rate, load_limited_pitch_up_rate) * dt;
+	const float max_pitch_down_step = configured_pitch_rate * dt;
 
-	_recovery_pitch_setpoint += constrain(time_target - _recovery_pitch_setpoint, -max_pitch_step, max_pitch_step);
+	_recovery_pitch_setpoint += constrain(time_target - _recovery_pitch_setpoint, -max_pitch_down_step, max_pitch_up_step);
 
 	// Recovery deliberately holds wings level and the entry heading. Its pitch
 	// ramp is isolated from TECS to prevent altitude/speed feedback from

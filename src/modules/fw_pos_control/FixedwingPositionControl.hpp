@@ -88,6 +88,7 @@
 #include <uORB/topics/tecs_status.h>
 #include <uORB/topics/trajectory_setpoint.h>
 #include <uORB/topics/vehicle_air_data.h>
+#include <uORB/topics/vehicle_acceleration.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_attitude_setpoint.h>
@@ -208,6 +209,7 @@ private:
 	uORB::Subscription _pos_sp_triplet_sub{ORB_ID(position_setpoint_triplet)};
 	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
 	uORB::Subscription _vehicle_air_data_sub{ORB_ID(vehicle_air_data)};
+	uORB::Subscription _vehicle_acceleration_sub{ORB_ID(vehicle_acceleration)};
 	uORB::Subscription _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
 	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::Subscription _vehicle_command_sub{ORB_ID(vehicle_command)};
@@ -322,6 +324,8 @@ private:
 	// mode. It owns only a short, rate-limited pitch transition.
 	bool _pn_received{false};
 	bool _pn_dive_flag{false};
+	bool _recovery_auto_trigger_pending{false};
+	hrt_abstime _recovery_auto_trigger_start{0};
 	bool _recovery_initialized{false};
 	bool _recovery_mission_request_sent{false};
 	hrt_abstime _recovery_start_time{0};
@@ -329,7 +333,10 @@ private:
 	float _recovery_pitch_setpoint{NAN};
 	float _recovery_yaw_setpoint{NAN};
 	float _recovery_throttle_setpoint{NAN};
+	float _recovery_normal_load{NAN};
+	hrt_abstime _recovery_normal_load_timestamp{0};
 
+	float _roll{0.0f};
 	float _pitch{0.0f};
 	float _pitchrate{0.0f};
 	float _yaw{0.0f};
@@ -801,6 +808,7 @@ private:
 	bool gpsless_nav_active() const;
 	bool recovery_active() const;
 	void update_recovery_trigger();
+	void request_recovery_mode();
 	void request_recovery_mission();
 	bool gpsless_nav_baro_valid() const;
 	void update_gpsless_nav();
@@ -1048,6 +1056,9 @@ private:
 		(ParamFloat<px4::params::FW_REC_TIME>) _param_fw_rec_time,
 		(ParamFloat<px4::params::FW_REC_PITCH>) _param_fw_rec_pitch,
 		(ParamFloat<px4::params::FW_REC_P_RATE>) _param_fw_rec_pitch_rate,
+		(ParamBool<px4::params::FW_REC_AUTO_EN>) _param_fw_rec_auto_en,
+		(ParamFloat<px4::params::FW_REC_AUTO_T>) _param_fw_rec_auto_t,
+		(ParamFloat<px4::params::FW_REC_LOAD_MAX>) _param_fw_rec_load_max,
 
 		(ParamFloat<px4::params::FW_T_CLMB_MAX>) _param_fw_t_clmb_max,
 		(ParamFloat<px4::params::FW_T_HRATE_FF>) _param_fw_t_hrate_ff,

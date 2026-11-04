@@ -1837,6 +1837,52 @@ PARAM_DEFINE_FLOAT(FW_REC_PITCH, 0.0f);
 PARAM_DEFINE_FLOAT(FW_REC_P_RATE, 20.0f);
 
 /**
+ * Enable automatic Recovery trigger
+ *
+ * Enables switching to Recovery when pn.dive_flag transitions from 1 to 0.
+ * Manual Recovery selection from QGroundControl, an RC flight-mode slot, or
+ * the console remains available regardless of this setting.
+ *
+ * @boolean
+ * @group FW Recovery
+ */
+PARAM_DEFINE_INT32(FW_REC_AUTO_EN, 1);
+
+/**
+ * Automatic Recovery trigger confirmation time
+ *
+ * Time that pn.dive_flag must remain zero after a 1 to 0 transition before
+ * automatic Recovery is requested. A value of zero requests Recovery
+ * immediately. If the flag returns to one during this interval, the trigger
+ * is cancelled.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 60.0
+ * @decimal 1
+ * @increment 0.1
+ * @group FW Recovery
+ */
+PARAM_DEFINE_FLOAT(FW_REC_AUTO_T, 0.0f);
+
+/**
+ * Recovery maximum normal load factor
+ *
+ * Limits the pitch-up rate during Recovery using true airspeed, measured
+ * normal specific force, and bank angle. The recovery controller always
+ * permits pitch-down commands, but reduces or pauses pitch-up if this limit
+ * would be exceeded.
+ *
+ * @unit norm
+ * @min 1.0
+ * @max 10.0
+ * @decimal 1
+ * @increment 0.1
+ * @group FW Recovery
+ */
+PARAM_DEFINE_FLOAT(FW_REC_LOAD_MAX, 3.0f);
+
+/**
  * Flaps setting during take-off
  *
  * Sets a fraction of full flaps during take-off.
