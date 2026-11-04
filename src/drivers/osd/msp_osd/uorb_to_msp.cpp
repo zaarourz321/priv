@@ -110,8 +110,8 @@ msp_name_t construct_display_message(const vehicle_status_s &vehicle_status,
 			display.set(MessageDisplayType::FLIGHT_MODE, "ACRO");
 			break;
 
-		case vehicle_status_s::NAVIGATION_STATE_UNUSED1:
-			display.set(MessageDisplayType::FLIGHT_MODE, "UNUSED1");
+		case vehicle_status_s::NAVIGATION_STATE_RECOVERY:
+			display.set(MessageDisplayType::FLIGHT_MODE, "RECOVERY");
 			break;
 
 		case vehicle_status_s::NAVIGATION_STATE_DESCEND:

@@ -103,6 +103,12 @@ void getModeRequirements(uint8_t vehicle_type, failsafe_flags_s &flags)
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV, flags.mode_req_attitude);
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV, flags.mode_req_prevent_arming);
 
+	// NAVIGATION_STATE_RECOVERY. This short fixed-wing transition only needs
+	// attitude/rate feedback; it deliberately does not require GPS or position.
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_RECOVERY, flags.mode_req_angular_velocity);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_RECOVERY, flags.mode_req_attitude);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_RECOVERY, flags.mode_req_prevent_arming);
+
 	// NAVIGATION_STATE_AUTO_RTL
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_RTL, flags.mode_req_angular_velocity);
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_RTL, flags.mode_req_attitude);

@@ -58,6 +58,8 @@ static inline navigation_mode_t navigation_mode(uint8_t nav_state)
 
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV: return navigation_mode_t::auto_loiter;
 
+	case vehicle_status_s::NAVIGATION_STATE_RECOVERY: return navigation_mode_t::auto_loiter;
+
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_RTL: return navigation_mode_t::auto_rtl;
 
 	case vehicle_status_s::NAVIGATION_STATE_ACRO: return navigation_mode_t::acro;
@@ -96,7 +98,7 @@ const char *const nav_state_names[vehicle_status_s::NAVIGATION_STATE_MAX] = {
 	"8: unallocated",
 	"AUTO_GPSLESS_NAV",
 	"ACRO",
-	"11: UNUSED",
+	"RECOVERY",
 	"DESCEND",
 	"TERMINATION",
 	"OFFBOARD",

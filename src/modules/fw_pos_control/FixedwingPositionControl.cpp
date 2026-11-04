@@ -33,6 +33,7 @@
 
 #include "FixedwingPositionControl.hpp"
 
+#include <commander/px4_custom_mode.h>
 #include <px4_platform_common/events.h>
 
 using math::constrain;
@@ -892,6 +893,11 @@ FixedwingPositionControl::set_control_mode_current(const hrt_abstime &now)
 	if (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROTARY_WING && !_vehicle_status.in_transition_mode) {
 		_control_mode_current = FW_POSCTRL_MODE_OTHER;
 		return; // do not publish the setpoint
+	}
+
+	if (recovery_active()) {
+		_control_mode_current = FW_POSCTRL_MODE_RECOVERY;
+		return;
 	}
 
 	if (gpsless_nav_active()) {
@@ -2537,6 +2543,13 @@ FixedwingPositionControl::Run()
 		// Update the Commander state before source selection so GPS-less NAV
 		// suppresses GPS/fused-altitude fallback from its very first cycle.
 		_vehicle_status_sub.update(&_vehicle_status);
+		update_recovery_trigger();
+
+		if (!recovery_active()) {
+			_recovery_initialized = false;
+			_recovery_mission_request_sent = false;
+		}
+
 		update_gps_fallback(_local_pos.timestamp);
 
 		if (_vehicle_land_detected_sub.updated()) {
@@ -2574,6 +2587,11 @@ FixedwingPositionControl::Run()
 							       && PX4_ISFINITE(_post_takeoff_target_altitude)
 							       && (_post_takeoff_target_altitude >= _takeoff_completion_altitude);
 			_tecs.handle_alt_step(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs());
+		}
+
+		if ((previous_control_mode == FW_POSCTRL_MODE_RECOVERY)
+		    && (_control_mode_current != FW_POSCTRL_MODE_RECOVERY)) {
+			_tecs.initialize(takeoff_altitude_for_tecs(), takeoff_altitude_rate_for_tecs(), _airspeed, _eas2tas);
 		}
 
 		update_gpsless_nav();
@@ -2652,6 +2670,11 @@ FixedwingPositionControl::Run()
 				break;
 			}
 
+		case FW_POSCTRL_MODE_RECOVERY: {
+				control_recovery(control_interval);
+				break;
+			}
+
 		case FW_POSCTRL_MODE_MANUAL_POSITION: {
 				control_manual_position(control_interval, curr_pos, ground_speed);
 				break;
@@ -2676,7 +2699,7 @@ FixedwingPositionControl::Run()
 		// end of AUTO takeoff until its GPS/altitude handover is complete.
 		// Do not let the independent GPS-fallback controller release or
 		// replace that heading command based on one cached GPS message.
-		if (!gpsless_nav_active() && !apply_gpsless_tube_launch_lateral(control_interval)) {
+		if (!gpsless_nav_active() && !recovery_active() && !apply_gpsless_tube_launch_lateral(control_interval)) {
 			apply_gps_fallback_lateral(control_interval);
 		}
 		gpsless_takeoff_status_publish(_local_pos.timestamp);
@@ -2692,7 +2715,8 @@ FixedwingPositionControl::Run()
 							       radians(_param_fw_p_lim_max.get()));
 			}
 
-			if (_control_mode.flag_control_position_enabled ||
+			if (_control_mode.flag_control_attitude_enabled ||
+			    _control_mode.flag_control_position_enabled ||
 			    _control_mode.flag_control_velocity_enabled ||
 			    _control_mode.flag_control_acceleration_enabled ||
 			    _control_mode.flag_control_altitude_enabled ||
@@ -2878,6 +2902,65 @@ FixedwingPositionControl::gpsless_nav_active() const
 }
 
 bool
+FixedwingPositionControl::recovery_active() const
+{
+	return _vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_RECOVERY;
+}
+
+void
+FixedwingPositionControl::update_recovery_trigger()
+{
+	pn_s pn{};
+
+	if (_pn_sub.update(&pn)) {
+		const bool dive_flag = pn.dive_flag != 0;
+
+		if (_pn_received && _pn_dive_flag && !dive_flag
+		    && (_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED)
+		    && !_landed
+		    && (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)
+		    && !recovery_active()) {
+			vehicle_command_s command{};
+			command.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
+			command.param1 = 1.f; // MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+			command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_RECOVERY);
+			command.target_system = _vehicle_status.system_id;
+			command.target_component = 1;
+			command.source_system = _vehicle_status.system_id;
+			command.source_component = 1;
+			command.from_external = false;
+			command.timestamp = hrt_absolute_time();
+			_vehicle_command_pub.publish(command);
+		}
+
+		_pn_dive_flag = dive_flag;
+		_pn_received = true;
+	}
+}
+
+void
+FixedwingPositionControl::request_recovery_mission()
+{
+	if (_recovery_mission_request_sent) {
+		return;
+	}
+
+	vehicle_command_s command{};
+	command.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
+	command.param1 = 1.f; // MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+	command.param2 = static_cast<float>(PX4_CUSTOM_MAIN_MODE_AUTO);
+	command.param3 = static_cast<float>(PX4_CUSTOM_SUB_MODE_AUTO_MISSION);
+	command.target_system = _vehicle_status.system_id;
+	command.target_component = 1;
+	command.source_system = _vehicle_status.system_id;
+	command.source_component = 1;
+	command.from_external = false;
+	command.timestamp = hrt_absolute_time();
+	_vehicle_command_pub.publish(command);
+	_recovery_mission_request_sent = true;
+}
+
+bool
 FixedwingPositionControl::gpsless_nav_baro_valid() const
 {
 	return PX4_ISFINITE(_baro_altitude) && (_baro_altitude_timestamp != 0)
@@ -3004,6 +3087,47 @@ FixedwingPositionControl::control_gpsless_nav(const float control_interval)
 				   _param_climbrate_target.get());
 	_att_sp.pitch_body = get_tecs_pitch();
 	_att_sp.thrust_body[0] = get_tecs_thrust();
+}
+
+void
+FixedwingPositionControl::control_recovery(const float control_interval)
+{
+	const float min_pitch = radians(_param_fw_p_lim_min.get());
+	const float max_pitch = radians(_param_fw_p_lim_max.get());
+
+	if (!_recovery_initialized) {
+		_recovery_initialized = true;
+		_recovery_mission_request_sent = false;
+		_recovery_start_time = hrt_absolute_time();
+		_recovery_initial_pitch = constrain(_pitch, min_pitch, max_pitch);
+		_recovery_pitch_setpoint = _recovery_initial_pitch;
+		_recovery_yaw_setpoint = _yaw;
+		_recovery_throttle_setpoint = PX4_ISFINITE(_att_sp.thrust_body[0]) ?
+						  constrain(_att_sp.thrust_body[0], _param_fw_thr_min.get(), _param_fw_thr_max.get()) :
+						  _param_fw_thr_trim.get();
+	}
+
+	const float transition_time = max(_param_fw_rec_time.get(), 0.1f);
+	const float elapsed = hrt_elapsed_time(&_recovery_start_time) * 1e-6f;
+	const float progress = constrain(elapsed / transition_time, 0.f, 1.f);
+	const float final_pitch = constrain(radians(_param_fw_rec_pitch.get()), min_pitch, max_pitch);
+	const float time_target = _recovery_initial_pitch + progress * (final_pitch - _recovery_initial_pitch);
+	const float max_pitch_step = radians(max(_param_fw_rec_pitch_rate.get(), 0.1f))
+				       * constrain(control_interval, 0.001f, 0.1f);
+
+	_recovery_pitch_setpoint += constrain(time_target - _recovery_pitch_setpoint, -max_pitch_step, max_pitch_step);
+
+	// Recovery deliberately holds wings level and the entry heading. Its pitch
+	// ramp is isolated from TECS to prevent altitude/speed feedback from
+	// reintroducing the dive command during the transition.
+	_att_sp.roll_body = 0.f;
+	_att_sp.pitch_body = _recovery_pitch_setpoint;
+	_att_sp.yaw_body = _recovery_yaw_setpoint;
+	_att_sp.thrust_body[0] = _recovery_throttle_setpoint;
+
+	if ((progress >= 1.f) && (fabsf(_recovery_pitch_setpoint - final_pitch) <= radians(0.05f))) {
+		request_recovery_mission();
+	}
 }
 
 bool

@@ -96,6 +96,7 @@ void getVehicleControlMode(bool armed, uint8_t nav_state, uint8_t vehicle_type,
 		break;
 
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV:
+	case vehicle_status_s::NAVIGATION_STATE_RECOVERY:
 		vehicle_control_mode.flag_control_auto_enabled = true;
 		vehicle_control_mode.flag_control_rates_enabled = true;
 		vehicle_control_mode.flag_control_attitude_enabled = true;

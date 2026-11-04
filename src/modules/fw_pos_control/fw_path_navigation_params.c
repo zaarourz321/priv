@@ -1791,6 +1791,52 @@ PARAM_DEFINE_INT32(FW_GPSNAV_ALTMOD, 0);
 PARAM_DEFINE_FLOAT(FW_GPSNAV_ALT, 0.0f);
 
 /**
+ * Recovery pitch transition time
+ *
+ * Nominal time used to ramp from the aircraft pitch at Recovery entry to
+ * FW_REC_PITCH. The pitch-rate limit FW_REC_P_RATE always takes precedence,
+ * so the transition may take longer when needed.
+ *
+ * @unit s
+ * @min 0.1
+ * @max 60.0
+ * @decimal 1
+ * @increment 0.1
+ * @group FW Recovery
+ */
+PARAM_DEFINE_FLOAT(FW_REC_TIME, 2.0f);
+
+/**
+ * Recovery final pitch angle
+ *
+ * Target pitch commanded before Recovery returns to Mission. Positive values
+ * pitch the fixed-wing aircraft up.
+ *
+ * @unit deg
+ * @min -45.0
+ * @max 45.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW Recovery
+ */
+PARAM_DEFINE_FLOAT(FW_REC_PITCH, 0.0f);
+
+/**
+ * Recovery maximum pitch setpoint rate
+ *
+ * Absolute maximum rate used while moving the Recovery pitch setpoint toward
+ * FW_REC_PITCH. This limit applies in addition to FW_REC_TIME.
+ *
+ * @unit deg/s
+ * @min 0.1
+ * @max 90.0
+ * @decimal 1
+ * @increment 1.0
+ * @group FW Recovery
+ */
+PARAM_DEFINE_FLOAT(FW_REC_P_RATE, 20.0f);
+
+/**
  * Flaps setting during take-off
  *
  * Sets a fraction of full flaps during take-off.

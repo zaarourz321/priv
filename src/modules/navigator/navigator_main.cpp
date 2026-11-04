@@ -822,6 +822,7 @@ void Navigator::run()
 			break;
 
 		case vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV:
+		case vehicle_status_s::NAVIGATION_STATE_RECOVERY:
 			// The fixed-wing position controller owns this Commander mode directly.
 			// Do not publish mission/global-position setpoints into it.
 			navigation_mode_new = nullptr;

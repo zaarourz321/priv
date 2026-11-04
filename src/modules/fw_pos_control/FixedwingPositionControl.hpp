@@ -80,6 +80,7 @@
 #include <uORB/topics/normalized_unsigned_setpoint.h>
 #include <uORB/topics/npfg_status.h>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/pn.h>
 #include <uORB/topics/position_controller_landing_status.h>
 #include <uORB/topics/position_controller_status.h>
 #include <uORB/topics/position_setpoint_triplet.h>
@@ -212,8 +213,10 @@ private:
 	uORB::Subscription _vehicle_command_sub{ORB_ID(vehicle_command)};
 	uORB::Subscription _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _pn_sub{ORB_ID(pn)};
 
 	uORB::Publication<vehicle_attitude_setpoint_s> _attitude_sp_pub;
+	uORB::Publication<vehicle_command_s> _vehicle_command_pub{ORB_ID(vehicle_command)};
 	uORB::Publication<vehicle_local_position_setpoint_s> _local_pos_sp_pub{ORB_ID(vehicle_local_position_setpoint)};
 	uORB::Publication<npfg_status_s> _npfg_status_pub{ORB_ID(npfg_status)};
 	uORB::Publication<position_controller_status_s>	_pos_ctrl_status_pub{ORB_ID(position_controller_status)};
@@ -257,6 +260,7 @@ private:
 		FW_POSCTRL_MODE_AUTO_LANDING_STRAIGHT,
 		FW_POSCTRL_MODE_AUTO_LANDING_CIRCULAR,
 		FW_POSCTRL_MODE_GPSLESS_NAV,
+		FW_POSCTRL_MODE_RECOVERY,
 		FW_POSCTRL_MODE_MANUAL_POSITION,
 		FW_POSCTRL_MODE_MANUAL_ALTITUDE,
 		FW_POSCTRL_MODE_OTHER
@@ -313,6 +317,18 @@ private:
 	float _gpsless_nav_heading_integrator{0.f};
 	Vector2f _gpsless_nav_dead_reckoned_position{};
 	Vector3f _gpsless_nav_air_velocity{};
+
+	// Recovery is entered from an external dive controller or as a selected
+	// mode. It owns only a short, rate-limited pitch transition.
+	bool _pn_received{false};
+	bool _pn_dive_flag{false};
+	bool _recovery_initialized{false};
+	bool _recovery_mission_request_sent{false};
+	hrt_abstime _recovery_start_time{0};
+	float _recovery_initial_pitch{NAN};
+	float _recovery_pitch_setpoint{NAN};
+	float _recovery_yaw_setpoint{NAN};
+	float _recovery_throttle_setpoint{NAN};
 
 	float _pitch{0.0f};
 	float _pitchrate{0.0f};
@@ -637,6 +653,7 @@ private:
 	 */
 	void control_auto_fixed_bank_alt_hold(const float control_interval);
 	void control_gpsless_nav(const float control_interval);
+	void control_recovery(const float control_interval);
 
 	/**
 	 * @brief Control airspeed with a fixed descent rate and roll angle.
@@ -782,6 +799,9 @@ private:
 	void apply_gps_fallback_lateral(float control_interval);
 	bool gpsless_nav_enabled() const;
 	bool gpsless_nav_active() const;
+	bool recovery_active() const;
+	void update_recovery_trigger();
+	void request_recovery_mission();
 	bool gpsless_nav_baro_valid() const;
 	void update_gpsless_nav();
 	void gpsless_nav_status_publish(const hrt_abstime now);
@@ -1025,6 +1045,9 @@ private:
 
 		(ParamFloat<px4::params::FW_P_LIM_MAX>) _param_fw_p_lim_max,
 		(ParamFloat<px4::params::FW_P_LIM_MIN>) _param_fw_p_lim_min,
+		(ParamFloat<px4::params::FW_REC_TIME>) _param_fw_rec_time,
+		(ParamFloat<px4::params::FW_REC_PITCH>) _param_fw_rec_pitch,
+		(ParamFloat<px4::params::FW_REC_P_RATE>) _param_fw_rec_pitch_rate,
 
 		(ParamFloat<px4::params::FW_T_CLMB_MAX>) _param_fw_t_clmb_max,
 		(ParamFloat<px4::params::FW_T_HRATE_FF>) _param_fw_t_hrate_ff,
