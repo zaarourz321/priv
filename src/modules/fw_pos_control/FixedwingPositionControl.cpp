@@ -84,6 +84,8 @@ FixedwingPositionControl::FixedwingPositionControl(bool vtol) :
 		_param_handle_airspeed_trans = param_find("VT_ARSP_TRANS");
 	}
 
+	_param_handle_fw_rec_aux = param_find("FW_REC_AUX");
+
 	// limit to 50 Hz
 	_local_pos_sub.set_interval_ms(20);
 
@@ -131,6 +133,10 @@ FixedwingPositionControl::parameters_update()
 	// VTOL parameter VT_ARSP_TRANS
 	if (_param_handle_airspeed_trans != PARAM_INVALID) {
 		param_get(_param_handle_airspeed_trans, &_param_airspeed_trans);
+	}
+
+	if (_param_handle_fw_rec_aux != PARAM_INVALID) {
+		param_get(_param_handle_fw_rec_aux, &_param_fw_rec_aux);
 	}
 
 	// NPFG parameters
@@ -2918,6 +2924,63 @@ FixedwingPositionControl::update_recovery_trigger()
 	const hrt_abstime now = hrt_absolute_time();
 	const bool manual_or_stabilized = (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL)
 					  || (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STAB);
+	const int32_t recovery_aux_selection = _param_fw_rec_aux;
+	bool recovery_aux_request = false;
+
+	// A selected AUX input is an additional, edge-triggered Recovery request.
+	// It does not change the existing dive-flag/QGC/RC-flight-mode paths.
+	if ((recovery_aux_selection >= 1) && (recovery_aux_selection <= 6) && !manual_or_stabilized && !recovery_active()
+	    && (_manual_control_setpoint.data_source == manual_control_setpoint_s::SOURCE_RC)) {
+		float recovery_aux = NAN;
+
+		switch (recovery_aux_selection) {
+		case 1:
+			recovery_aux = _manual_control_setpoint.aux1;
+			break;
+
+		case 2:
+			recovery_aux = _manual_control_setpoint.aux2;
+			break;
+
+		case 3:
+			recovery_aux = _manual_control_setpoint.aux3;
+			break;
+
+		case 4:
+			recovery_aux = _manual_control_setpoint.aux4;
+			break;
+
+		case 5:
+			recovery_aux = _manual_control_setpoint.aux5;
+			break;
+
+		case 6:
+			recovery_aux = _manual_control_setpoint.aux6;
+			break;
+
+		default:
+			break;
+		}
+
+		if (PX4_ISFINITE(recovery_aux)) {
+			if (recovery_aux < -0.5f) {
+				_recovery_aux_armed_selection = recovery_aux_selection;
+
+			} else if ((recovery_aux > 0.5f) && (_recovery_aux_armed_selection == recovery_aux_selection)) {
+				recovery_aux_request = true;
+				_recovery_aux_armed_selection = 0;
+			}
+
+		} else {
+			_recovery_aux_armed_selection = 0;
+		}
+
+	} else {
+		// Re-arm only after the selected input is observed low again. This also
+		// prevents a high AUX switch from requesting Recovery after leaving
+		// Manual or Stabilized mode.
+		_recovery_aux_armed_selection = 0;
+	}
 	pn_s pn{};
 
 	if (_pn_sub.update(&pn)) {
@@ -2934,6 +2997,16 @@ FixedwingPositionControl::update_recovery_trigger()
 
 		_pn_dive_flag = dive_flag;
 		_pn_received = true;
+	}
+
+	if (recovery_aux_request) {
+		_recovery_auto_trigger_pending = false;
+
+		if ((_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED)
+		    && !_landed
+		    && (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)) {
+			request_recovery_mode();
+		}
 	}
 
 	// Pilot-selected Manual and Stabilized modes always take priority over an

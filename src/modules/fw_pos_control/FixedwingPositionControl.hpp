@@ -326,6 +326,7 @@ private:
 	bool _pn_dive_flag{false};
 	bool _recovery_auto_trigger_pending{false};
 	hrt_abstime _recovery_auto_trigger_start{0};
+	int8_t _recovery_aux_armed_selection{0};
 	bool _recovery_initialized{false};
 	bool _recovery_exit_request_sent{false};
 	hrt_abstime _recovery_start_time{0};
@@ -509,6 +510,8 @@ private:
 	matrix::Vector2d _transition_waypoint{(double)NAN, (double)NAN};
 	param_t _param_handle_airspeed_trans{PARAM_INVALID};
 	float _param_airspeed_trans{NAN}; // [m/s]
+	param_t _param_handle_fw_rec_aux{PARAM_INVALID};
+	int32_t _param_fw_rec_aux{0};
 
 	// ESTIMATOR RESET COUNTERS
 

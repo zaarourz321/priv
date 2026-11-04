@@ -1901,6 +1901,28 @@ PARAM_DEFINE_FLOAT(FW_REC_LOAD_MAX, 3.0f);
 PARAM_DEFINE_INT32(FW_REC_EXIT_MODE, 0);
 
 /**
+ * Recovery AUX trigger
+ *
+ * Selects an RC auxiliary input that requests Recovery on a low-to-high
+ * transition. The selected AUX input must first be observed low, so enabling
+ * this parameter while its switch is already high does not trigger Recovery.
+ * This trigger is in addition to the dive-flag, QGroundControl, and RC
+ * flight-mode Recovery entry paths. Set to zero to disable it.
+ *
+ * @value 0 Disable
+ * @value 1 AUX1
+ * @value 2 AUX2
+ * @value 3 AUX3
+ * @value 4 AUX4
+ * @value 5 AUX5
+ * @value 6 AUX6
+ * @min 0
+ * @max 6
+ * @group FW Recovery
+ */
+PARAM_DEFINE_INT32(FW_REC_AUX, 0);
+
+/**
  * Flaps setting during take-off
  *
  * Sets a fraction of full flaps during take-off.
