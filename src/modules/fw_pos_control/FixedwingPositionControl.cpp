@@ -3175,7 +3175,10 @@ FixedwingPositionControl::control_recovery(const float control_interval)
 		_recovery_initialized = true;
 		_recovery_exit_request_sent = false;
 		_recovery_start_time = hrt_absolute_time();
-		_recovery_initial_pitch = constrain(entry_pitch, min_pitch, max_pitch);
+		// Start exactly at the latest measured body pitch. Do not apply the
+		// normal pitch limits here: clamping entry_pitch would itself create the
+		// step Recovery is intended to avoid. The final target remains bounded.
+		_recovery_initial_pitch = entry_pitch;
 		_recovery_pitch_setpoint = _recovery_initial_pitch;
 		_recovery_yaw_setpoint = entry_yaw;
 		_recovery_throttle_setpoint = PX4_ISFINITE(_att_sp.thrust_body[0]) ?
