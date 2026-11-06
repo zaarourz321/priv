@@ -1907,7 +1907,9 @@ PARAM_DEFINE_INT32(FW_REC_EXIT_MODE, 0);
  * transition. The selected AUX input must first be observed low, so enabling
  * this parameter while its switch is already high does not trigger Recovery.
  * This trigger is in addition to the dive-flag, QGroundControl, and RC
- * flight-mode Recovery entry paths. Set to zero to disable it.
+ * flight-mode Recovery entry paths. It is accepted from Manual, Stabilized,
+ * disarmed, and landed states as an explicit pilot request. Set to zero to
+ * disable it.
  *
  * @value 0 Disable
  * @value 1 AUX1

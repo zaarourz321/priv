@@ -2928,8 +2928,9 @@ FixedwingPositionControl::update_recovery_trigger()
 	bool recovery_aux_request = false;
 
 	// A selected AUX input is an additional, edge-triggered Recovery request.
-	// It does not change the existing dive-flag/QGC/RC-flight-mode paths.
-	if ((recovery_aux_selection >= 1) && (recovery_aux_selection <= 6) && !manual_or_stabilized && !recovery_active()
+	// It intentionally acts like an explicit pilot mode request and therefore
+	// remains available from Manual, Stabilized, disarmed, and landed states.
+	if ((recovery_aux_selection >= 1) && (recovery_aux_selection <= 6)
 	    && (_manual_control_setpoint.data_source == manual_control_setpoint_s::SOURCE_RC)) {
 		float recovery_aux = NAN;
 
@@ -2976,9 +2977,7 @@ FixedwingPositionControl::update_recovery_trigger()
 		}
 
 	} else {
-		// Re-arm only after the selected input is observed low again. This also
-		// prevents a high AUX switch from requesting Recovery after leaving
-		// Manual or Stabilized mode.
+		// Re-arm only after the selected input is observed low again.
 		_recovery_aux_armed_selection = 0;
 	}
 	pn_s pn{};
@@ -3001,12 +3000,7 @@ FixedwingPositionControl::update_recovery_trigger()
 
 	if (recovery_aux_request) {
 		_recovery_auto_trigger_pending = false;
-
-		if ((_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED)
-		    && !_landed
-		    && (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)) {
-			request_recovery_mode();
-		}
+		request_recovery_mode();
 	}
 
 	// Pilot-selected Manual and Stabilized modes always take priority over an
