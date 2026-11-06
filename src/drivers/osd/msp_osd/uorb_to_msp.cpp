@@ -130,8 +130,8 @@ msp_name_t construct_display_message(const vehicle_status_s &vehicle_status,
 			display.set(MessageDisplayType::FLIGHT_MODE, "STAB");
 			break;
 
-		case vehicle_status_s::NAVIGATION_STATE_UNUSED2:
-			display.set(MessageDisplayType::FLIGHT_MODE, "UNUSED2");
+		case vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION:
+			display.set(MessageDisplayType::FLIGHT_MODE, "ABORT_MISSION");
 			break;
 
 		case vehicle_status_s::NAVIGATION_STATE_AUTO_TAKEOFF:

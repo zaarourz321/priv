@@ -398,6 +398,9 @@ int Commander::custom_command(int argc, char *argv[])
 			} else if (!strcmp(argv[1], "recovery")) {
 				send_vehicle_command(vehicle_command_s::VEHICLE_CMD_DO_SET_MODE, 1, PX4_CUSTOM_MAIN_MODE_RECOVERY);
 
+			} else if (!strcmp(argv[1], "abort_mission")) {
+				send_vehicle_command(vehicle_command_s::VEHICLE_CMD_DO_SET_MODE, 1, PX4_CUSTOM_MAIN_MODE_ABORT_MISSION);
+
 			} else if (!strcmp(argv[1], "auto:takeoff")) {
 				send_vehicle_command(vehicle_command_s::VEHICLE_CMD_DO_SET_MODE, 1, PX4_CUSTOM_MAIN_MODE_AUTO,
 						     PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF);
@@ -815,6 +818,9 @@ Commander::handle_command(const vehicle_command_s &cmd)
 
 				} else if (custom_main_mode == PX4_CUSTOM_MAIN_MODE_RECOVERY) {
 					desired_nav_state = vehicle_status_s::NAVIGATION_STATE_RECOVERY;
+
+				} else if (custom_main_mode == PX4_CUSTOM_MAIN_MODE_ABORT_MISSION) {
+					desired_nav_state = vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION;
 
 				} else if (custom_main_mode == PX4_CUSTOM_MAIN_MODE_OFFBOARD) {
 					desired_nav_state = vehicle_status_s::NAVIGATION_STATE_OFFBOARD;

@@ -86,6 +86,7 @@ void getVehicleControlMode(bool armed, uint8_t nav_state, uint8_t vehicle_type,
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER:
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_TAKEOFF:
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_VTOL_TAKEOFF:
+	case vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION:
 		vehicle_control_mode.flag_control_auto_enabled = true;
 		vehicle_control_mode.flag_control_rates_enabled = true;
 		vehicle_control_mode.flag_control_attitude_enabled = true;

@@ -88,6 +88,16 @@ void getModeRequirements(uint8_t vehicle_type, failsafe_flags_s &flags)
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION, flags.mode_req_mission);
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION, flags.mode_req_wind_and_flight_time_compliance);
 
+	// NAVIGATION_STATE_ABORT_MISSION follows the active termination-point
+	// mission item with the same estimator requirements as a normal mission.
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION, flags.mode_req_angular_velocity);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION, flags.mode_req_attitude);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION, flags.mode_req_local_position);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION, flags.mode_req_global_position);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION, flags.mode_req_local_alt);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION, flags.mode_req_mission);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION, flags.mode_req_wind_and_flight_time_compliance);
+
 	// NAVIGATION_STATE_AUTO_LOITER
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER, flags.mode_req_angular_velocity);
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER, flags.mode_req_attitude);

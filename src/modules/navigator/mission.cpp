@@ -47,6 +47,7 @@
 
 #include "mission.h"
 #include "navigator.h"
+#include "../commander/px4_custom_mode.h"
 
 #include <string.h>
 #include <drivers/drv_hrt.h>
@@ -161,6 +162,10 @@ Mission::on_inactive()
 void
 Mission::on_inactivation()
 {
+	publish_start_termination(false);
+	_abort_mission_mode_requested = false;
+	_termination_point_loitering = false;
+
 	// Disable camera trigger
 	vehicle_command_s cmd {};
 	cmd.command = vehicle_command_s::VEHICLE_CMD_DO_TRIGGER_CONTROL;
@@ -178,6 +183,90 @@ Mission::on_inactivation()
 
 	/* reset so current mission item gets restarted if mission was paused */
 	_work_item_type = WORK_ITEM_TYPE_DEFAULT;
+}
+
+void
+Mission::publish_start_termination(bool start)
+{
+	if (!_start_termination_published || _start_termination != start) {
+		start_termination_s status{};
+		status.timestamp = hrt_absolute_time();
+		status.start_termination = start;
+		_start_termination_pub.publish(status);
+
+		_start_termination = start;
+		_start_termination_published = true;
+	}
+}
+
+void
+Mission::update_termination_point()
+{
+	if (_mission_item.nav_cmd != NAV_CMD_HUNTER_TERMINATION_POINT) {
+		publish_start_termination(false);
+		_abort_mission_mode_requested = false;
+		_termination_point_loitering = false;
+		return;
+	}
+
+	if (_termination_point_loitering) {
+		publish_start_termination(false);
+		return;
+	}
+
+	// Selecting the termination item is the explicit request to enter Abort
+	// Mission. The Mission navigator remains active in that mode, so it keeps
+	// the selected item and its pre-termination altitude setpoint.
+	if (_navigator->get_vstatus()->nav_state != vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION) {
+		if (!_abort_mission_mode_requested) {
+			vehicle_command_s command{};
+			command.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
+			command.param1 = 1.f;
+			command.param2 = PX4_CUSTOM_MAIN_MODE_ABORT_MISSION;
+			_navigator->publish_vehicle_cmd(&command);
+			_abort_mission_mode_requested = true;
+		}
+
+		// Do not treat the one-cycle Mission-to-Abort transition as a failed
+		// termination start when the vehicle is already at the point.
+		publish_start_termination(false);
+		return;
+	}
+
+	float distance_xy = -1.f;
+	float distance_z = -1.f;
+	get_distance_to_point_global_wgs84(_mission_item.lat, _mission_item.lon,
+					  get_absolute_altitude_for_item(_mission_item),
+					  _navigator->get_global_position()->lat,
+					  _navigator->get_global_position()->lon,
+					  _navigator->get_global_position()->alt,
+					  &distance_xy, &distance_z);
+
+	// Param 2 is the radius at which the external termination sequence may
+	// start. NaN is possible for a manually-created mission item, so retain the
+	// command's documented default in that case.
+	const float start_distance = PX4_ISFINITE(_mission_item.params[1]) ?
+				     math::max(_mission_item.params[1], 0.f) : 900.f;
+
+	const bool termination_ready = _navigator->get_vstatus()->nav_state == vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION
+					       && distance_xy >= 0.f && distance_xy <= start_distance;
+	publish_start_termination(termination_ready);
+
+	// A zero/too-small start radius must not silently advance past the terminal
+	// point. Hold at the current position until the operator resolves it.
+	if (!termination_ready && distance_xy >= 0.f
+	    && distance_xy <= _navigator->get_acceptance_radius()) {
+		setLoiterItemFromCurrentPosition(&_mission_item);
+		_mission_item.autocontinue = false;
+
+		position_setpoint_triplet_s *pos_sp_triplet = _navigator->get_position_setpoint_triplet();
+		mission_item_to_position_setpoint(_mission_item, &pos_sp_triplet->current);
+		pos_sp_triplet->next.valid = false;
+		_navigator->set_can_loiter_at_sp(true);
+		_navigator->set_position_setpoint_triplet_updated();
+		_termination_point_loitering = true;
+		mavlink_log_critical(_navigator->get_mavlink_log_pub(), "Termination start not armed, loitering\t");
+	}
 }
 
 void
@@ -242,10 +331,11 @@ Mission::on_active()
 		set_mission_items();
 	}
 
-	/* lets check if we reached the current mission item */
+	update_termination_point();
+
+	/* A termination point is owned by the Abort Mission state machine. */
 	if (_mission_type != MISSION_TYPE_NONE
-	    && !(_mission_item.nav_cmd == NAV_CMD_HUNTER_TERMINATION_POINT
-		 && _termination_command_sequence == _current_mission_index)
+	    && _mission_item.nav_cmd != NAV_CMD_HUNTER_TERMINATION_POINT
 	    && is_mission_item_reached_or_completed()) {
 		/* If we just completed a takeoff which was inserted before the right waypoint,
 		   there is no need to report that we reached it because we didn't. */
@@ -253,19 +343,7 @@ Mission::on_active()
 			set_mission_item_reached();
 		}
 
-		if (_mission_item.nav_cmd == NAV_CMD_HUNTER_TERMINATION_POINT) {
-			// QGC's Abort Mission action selects this mission item. Do not allow
-			// auto-continue to bypass the terminal action after the point is reached.
-			if (_termination_command_sequence != _current_mission_index) {
-				vehicle_command_s command{};
-				command.command = vehicle_command_s::VEHICLE_CMD_DO_FLIGHTTERMINATION;
-				command.param1 = 1.f; // actual termination, not the lockdown test mode
-				_navigator->publish_vehicle_cmd(&command);
-				_termination_command_sequence = _current_mission_index;
-				mavlink_log_critical(_navigator->get_mavlink_log_pub(), "Termination point reached\t");
-			}
-
-		} else if (_mission_item.autocontinue) {
+		if (_mission_item.autocontinue) {
 			/* switch to next waypoint if 'autocontinue' flag set */
 			advance_mission();
 			set_mission_items();
@@ -677,10 +755,6 @@ Mission::set_mission_items()
 
 	if (prepare_mission_items(&_mission_item, &mission_item_next_position, &has_next_position_item,
 				  &mission_item_after_next_position, &has_after_next_position_item)) {
-		if (_termination_command_sequence != _current_mission_index) {
-			_termination_command_sequence = -1;
-		}
-
 		/* if mission type changed, notify */
 		if (_mission_type != MISSION_TYPE_MISSION) {
 			mavlink_log_info(_navigator->get_mavlink_log_pub(),

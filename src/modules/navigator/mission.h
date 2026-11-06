@@ -61,6 +61,7 @@
 #include <uORB/topics/mission_result.h>
 #include <uORB/topics/navigator_mission_item.h>
 #include <uORB/topics/position_setpoint_triplet.h>
+#include <uORB/topics/start_termination.h>
 #include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_roi.h>
@@ -239,6 +240,8 @@ private:
 	bool position_setpoint_equal(const position_setpoint_s *p1, const position_setpoint_s *p2) const;
 
 	void publish_navigator_mission_item();
+	void update_termination_point();
+	void publish_start_termination(bool start);
 
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::MIS_DIST_1WP>) _param_mis_dist_1wp,
@@ -246,6 +249,7 @@ private:
 	)
 
 	uORB::Publication<navigator_mission_item_s> _navigator_mission_item_pub{ORB_ID::navigator_mission_item};
+	uORB::Publication<start_termination_s> _start_termination_pub{ORB_ID(start_termination)};
 
 	uORB::Subscription	_mission_sub{ORB_ID(mission)};		/**< mission subscription */
 	mission_s		_mission {};
@@ -277,7 +281,10 @@ private:
 	bool _need_mission_reset{false};
 	bool _mission_waypoints_changed{false};
 	bool _mission_changed{false}; /** < true if the mission changed since the mission mode was active */
-	int32_t _termination_command_sequence{-1};
+	bool _start_termination{false};
+	bool _start_termination_published{false};
+	bool _abort_mission_mode_requested{false};
+	bool _termination_point_loitering{false};
 
 	// Work Item corresponds to the sub-mode set on the "MAV_CMD_DO_SET_MODE" MAVLink message
 	enum work_item_type {

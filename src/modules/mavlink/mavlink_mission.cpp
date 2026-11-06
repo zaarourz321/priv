@@ -1478,8 +1478,11 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 
 		case NAV_CMD_HUNTER_TERMINATION_POINT:
 			// The command carries a global coordinate. Parameter 7 is the
-			// terminal altitude and is handled like the other global NAV items.
+			// terrain AMSL altitude. Parameters 1 and 2 define the pre-termination
+			// height above terrain and start distance respectively.
 			mission_item->nav_cmd = NAV_CMD_HUNTER_TERMINATION_POINT;
+			mission_item->params[0] = mavlink_mission_item->param1;
+			mission_item->params[1] = mavlink_mission_item->param2;
 			break;
 
 		case MAV_CMD_CONDITION_GATE:
@@ -1773,7 +1776,8 @@ MavlinkMissionManager::format_mavlink_mission_item(const struct mission_item_s *
 			break;
 
 		case NAV_CMD_HUNTER_TERMINATION_POINT:
-			// No command-specific parameters: lat/lon/alt are serialized above.
+			mavlink_mission_item->param1 = mission_item->params[0];
+			mavlink_mission_item->param2 = mission_item->params[1];
 			break;
 
 		case MAV_CMD_NAV_FENCE_RETURN_POINT:

@@ -706,6 +706,14 @@ MissionBlock::mission_item_to_position_setpoint(const mission_item_s &item, posi
 	sp->lat = item.lat;
 	sp->lon = item.lon;
 	sp->alt = get_absolute_altitude_for_item(item);
+
+	if (item.nav_cmd == NAV_CMD_HUNTER_TERMINATION_POINT) {
+		// Parameter 7 is the terrain AMSL altitude at the termination point.
+		// Parameter 1 is the altitude the aircraft must hold before the
+		// downstream termination system is allowed to start.
+		sp->alt += PX4_ISFINITE(item.params[0]) ? math::max(item.params[0], 0.f) : 400.f;
+	}
+
 	sp->yaw = item.yaw;
 	sp->yaw_valid = PX4_ISFINITE(item.yaw);
 	sp->loiter_radius = (fabsf(item.loiter_radius) > NAV_EPSILON_POSITION) ? fabsf(item.loiter_radius) :

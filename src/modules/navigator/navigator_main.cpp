@@ -672,6 +672,7 @@ void Navigator::run()
 
 		switch (_vstatus.nav_state) {
 		case vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION:
+		case vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION:
 			_pos_sp_triplet_published_invalid_once = false;
 
 			_mission.set_execution_mode(mission_result_s::MISSION_EXECUTION_MODE_NORMAL);

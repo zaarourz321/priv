@@ -54,6 +54,8 @@ static inline navigation_mode_t navigation_mode(uint8_t nav_state)
 
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION: return navigation_mode_t::auto_mission;
 
+	case vehicle_status_s::NAVIGATION_STATE_ABORT_MISSION: return navigation_mode_t::auto_mission;
+
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER: return navigation_mode_t::auto_loiter;
 
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_GPSLESS_NAV: return navigation_mode_t::auto_loiter;
@@ -103,7 +105,7 @@ const char *const nav_state_names[vehicle_status_s::NAVIGATION_STATE_MAX] = {
 	"TERMINATION",
 	"OFFBOARD",
 	"STAB",
-	"16: UNUSED2",
+	"ABORT_MISSION",
 	"AUTO_TAKEOFF",
 	"AUTO_LAND",
 	"AUTO_FOLLOW_TARGET",
