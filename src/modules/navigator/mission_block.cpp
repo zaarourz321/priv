@@ -673,6 +673,7 @@ bool
 MissionBlock::item_contains_position(const mission_item_s &item)
 {
 	return item.nav_cmd == NAV_CMD_WAYPOINT ||
+	       item.nav_cmd == NAV_CMD_HUNTER_TERMINATION_POINT ||
 	       item.nav_cmd == NAV_CMD_LOITER_UNLIMITED ||
 	       item.nav_cmd == NAV_CMD_LOITER_TIME_LIMIT ||
 	       item.nav_cmd == NAV_CMD_LAND ||

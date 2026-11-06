@@ -243,14 +243,29 @@ Mission::on_active()
 	}
 
 	/* lets check if we reached the current mission item */
-	if (_mission_type != MISSION_TYPE_NONE && is_mission_item_reached_or_completed()) {
+	if (_mission_type != MISSION_TYPE_NONE
+	    && !(_mission_item.nav_cmd == NAV_CMD_HUNTER_TERMINATION_POINT
+		 && _termination_command_sequence == _current_mission_index)
+	    && is_mission_item_reached_or_completed()) {
 		/* If we just completed a takeoff which was inserted before the right waypoint,
 		   there is no need to report that we reached it because we didn't. */
 		if (_work_item_type != WORK_ITEM_TYPE_TAKEOFF) {
 			set_mission_item_reached();
 		}
 
-		if (_mission_item.autocontinue) {
+		if (_mission_item.nav_cmd == NAV_CMD_HUNTER_TERMINATION_POINT) {
+			// QGC's Abort Mission action selects this mission item. Do not allow
+			// auto-continue to bypass the terminal action after the point is reached.
+			if (_termination_command_sequence != _current_mission_index) {
+				vehicle_command_s command{};
+				command.command = vehicle_command_s::VEHICLE_CMD_DO_FLIGHTTERMINATION;
+				command.param1 = 1.f; // actual termination, not the lockdown test mode
+				_navigator->publish_vehicle_cmd(&command);
+				_termination_command_sequence = _current_mission_index;
+				mavlink_log_critical(_navigator->get_mavlink_log_pub(), "Termination point reached\t");
+			}
+
+		} else if (_mission_item.autocontinue) {
 			/* switch to next waypoint if 'autocontinue' flag set */
 			advance_mission();
 			set_mission_items();
@@ -662,6 +677,10 @@ Mission::set_mission_items()
 
 	if (prepare_mission_items(&_mission_item, &mission_item_next_position, &has_next_position_item,
 				  &mission_item_after_next_position, &has_after_next_position_item)) {
+		if (_termination_command_sequence != _current_mission_index) {
+			_termination_command_sequence = -1;
+		}
+
 		/* if mission type changed, notify */
 		if (_mission_type != MISSION_TYPE_MISSION) {
 			mavlink_log_info(_navigator->get_mavlink_log_pub(),

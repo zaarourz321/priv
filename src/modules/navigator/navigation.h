@@ -99,6 +99,9 @@ enum NAV_CMD {
 	NAV_CMD_VIDEO_START_CAPTURE = 2500,
 	NAV_CMD_VIDEO_STOP_CAPTURE = 2501,
 	NAV_CMD_DO_VTOL_TRANSITION = 3000,
+	// Hunter custom mission item. It is a terminal navigation point: reaching
+	// its coordinate triggers the normal PX4 flight-termination command.
+	NAV_CMD_HUNTER_TERMINATION_POINT = 31021,
 	NAV_CMD_FENCE_RETURN_POINT = 5000,
 	NAV_CMD_FENCE_POLYGON_VERTEX_INCLUSION = 5001,
 	NAV_CMD_FENCE_POLYGON_VERTEX_EXCLUSION = 5002,

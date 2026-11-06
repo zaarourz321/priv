@@ -253,6 +253,7 @@ bool FeasibilityChecker::checkMissionItemValidity(mission_item_s &mission_item, 
 	// check if we find unsupported items and reject mission if so
 	if (mission_item.nav_cmd != NAV_CMD_IDLE &&
 	    mission_item.nav_cmd != NAV_CMD_WAYPOINT &&
+	    mission_item.nav_cmd != NAV_CMD_HUNTER_TERMINATION_POINT &&
 	    mission_item.nav_cmd != NAV_CMD_LOITER_UNLIMITED &&
 	    mission_item.nav_cmd != NAV_CMD_LOITER_TIME_LIMIT &&
 	    mission_item.nav_cmd != NAV_CMD_RETURN_TO_LAUNCH &&

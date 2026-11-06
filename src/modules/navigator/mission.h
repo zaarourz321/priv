@@ -277,6 +277,7 @@ private:
 	bool _need_mission_reset{false};
 	bool _mission_waypoints_changed{false};
 	bool _mission_changed{false}; /** < true if the mission changed since the mission mode was active */
+	int32_t _termination_command_sequence{-1};
 
 	// Work Item corresponds to the sub-mode set on the "MAV_CMD_DO_SET_MODE" MAVLink message
 	enum work_item_type {
