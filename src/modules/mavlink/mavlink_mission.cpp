@@ -44,6 +44,7 @@
 #include "mavlink_main.h"
 
 #include <lib/geo/geo.h>
+#include <parameters/param.h>
 #include <systemlib/err.h>
 #include <drivers/drv_hrt.h>
 #include <px4_platform_common/defines.h>
@@ -142,6 +143,33 @@ MavlinkMissionManager::load_safepoint_stats()
 	}
 
 	return ret;
+}
+
+bool
+MavlinkMissionManager::termination_point_required() const
+{
+	int32_t required = 0;
+	const param_t handle = param_find("MIS_TERM_REQ");
+
+	return (handle != PARAM_INVALID) && (param_get(handle, &required) == PX4_OK) && (required != 0);
+}
+
+bool
+MavlinkMissionManager::mission_has_termination_point(dm_item_t dataman_id, uint16_t count) const
+{
+	for (uint16_t index = 0; index < count; index++) {
+		mission_item_s mission_item{};
+
+		if (dm_read(dataman_id, index, &mission_item, sizeof(mission_item)) != sizeof(mission_item)) {
+			return false;
+		}
+
+		if (mission_item.nav_cmd == NAV_CMD_HUNTER_TERMINATION_POINT) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 /**
@@ -1226,7 +1254,15 @@ MavlinkMissionManager::handle_mission_item_both(const mavlink_message_t *msg)
 
 			switch (_mission_type) {
 			case MAV_MISSION_TYPE_MISSION:
-				ret = update_active_mission(_transfer_dataman_id, _transfer_count, _transfer_current_seq);
+				if (termination_point_required()
+				    && !mission_has_termination_point(_transfer_dataman_id, _transfer_count)) {
+					ret = PX4_ERROR;
+					_mavlink->send_statustext_critical("Mission rejected: termination point required\t");
+
+				} else {
+					ret = update_active_mission(_transfer_dataman_id, _transfer_count, _transfer_current_seq);
+				}
+
 				break;
 
 			case MAV_MISSION_TYPE_FENCE:

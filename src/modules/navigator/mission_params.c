@@ -73,6 +73,18 @@ PARAM_DEFINE_FLOAT(MIS_TAKEOFF_ALT, 2.5f);
 PARAM_DEFINE_INT32(MIS_TKO_LAND_REQ, 0);
 
 /**
+ * Require a Hunter Termination Point in uploaded missions
+ *
+ * When enabled, reject an uploaded mission unless it contains a
+ * MAV_CMD_HUNTER_TERMINATION_POINT mission item. The existing active
+ * mission is left unchanged if the upload is rejected.
+ *
+ * @boolean
+ * @group Mission
+ */
+PARAM_DEFINE_INT32(MIS_TERM_REQ, 0);
+
+/**
  * Maximal horizontal distance from current position to first waypoint
  *
  * Failsafe check to prevent running mission stored from previous flight at a new takeoff location.

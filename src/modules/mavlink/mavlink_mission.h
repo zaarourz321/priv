@@ -159,6 +159,9 @@ private:
 
 	void init_offboard_mission();
 
+	bool termination_point_required() const;
+	bool mission_has_termination_point(dm_item_t dataman_id, uint16_t count) const;
+
 	int update_active_mission(dm_item_t dataman_id, uint16_t count, int32_t seq);
 
 	/** store the geofence count to dataman */
