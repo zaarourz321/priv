@@ -465,6 +465,122 @@ PARAM_DEFINE_INT32(FW_GD_P_SRC, 0);
 PARAM_DEFINE_INT32(FW_GD_Y_SRC, 0);
 
 /**
+ * Roll rate plant order
+ *
+ * Selects the rate plant used for roll gain design. First order retains the
+ * existing aerodynamic rate model. Actuator augmented includes the configured
+ * aileron time constant and performs third-order PI pole placement.
+ *
+ * @value 1 First-order aerodynamic plant
+ * @value 2 Actuator-augmented second-order plant
+ * @min 1
+ * @max 2
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_INT32(FW_GD_R_ORD, 1);
+
+/**
+ * Pitch rate plant order
+ *
+ * Selects the rate plant used for pitch gain design.
+ *
+ * @value 1 First-order aerodynamic plant
+ * @value 2 Actuator-augmented second-order plant
+ * @min 1
+ * @max 2
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_INT32(FW_GD_P_ORD, 1);
+
+/**
+ * Yaw rate plant order
+ *
+ * Selects the rate plant used for yaw gain design.
+ *
+ * @value 1 First-order aerodynamic plant
+ * @value 2 Actuator-augmented second-order plant
+ * @min 1
+ * @max 2
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_INT32(FW_GD_Y_ORD, 1);
+
+/**
+ * Roll actuator time constant
+ *
+ * Aileron actuator first-order time constant used only when FW_GD_R_ORD is 2.
+ * Measure the time to 63 percent of a small, unsaturated surface step.
+ *
+ * @unit s
+ * @min 0.005
+ * @max 1.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_FLOAT(FW_GD_R_ATC, 0.050f);
+
+/**
+ * Pitch actuator time constant
+ *
+ * Elevator actuator first-order time constant used only when FW_GD_P_ORD is 2.
+ *
+ * @unit s
+ * @min 0.005
+ * @max 1.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_FLOAT(FW_GD_P_ATC, 0.050f);
+
+/**
+ * Yaw actuator time constant
+ *
+ * Rudder actuator first-order time constant used only when FW_GD_Y_ORD is 2.
+ *
+ * @unit s
+ * @min 0.005
+ * @max 1.0
+ * @decimal 3
+ * @increment 0.005
+ * @group FW Gain Design Model
+ */
+PARAM_DEFINE_FLOAT(FW_GD_Y_ATC, 0.050f);
+
+/**
+ * Enable roll rate feed-forward
+ *
+ * Enables the aerodynamic steady-state inverse on the roll-rate setpoint.
+ * P and I remain the same pole-placement gains because feed-forward is a
+ * parallel reference path, not part of the feedback loop.
+ *
+ * @boolean
+ * @group FW Gain Design Rate
+ */
+PARAM_DEFINE_INT32(FW_GD_R_FF_EN, 1);
+
+/**
+ * Enable pitch rate feed-forward
+ *
+ * Enables the aerodynamic steady-state inverse on the pitch-rate setpoint.
+ *
+ * @boolean
+ * @group FW Gain Design Rate
+ */
+PARAM_DEFINE_INT32(FW_GD_P_FF_EN, 1);
+
+/**
+ * Enable yaw rate feed-forward
+ *
+ * Enables the aerodynamic steady-state inverse on the yaw-rate setpoint.
+ *
+ * @boolean
+ * @group FW Gain Design Rate
+ */
+PARAM_DEFINE_INT32(FW_GD_Y_FF_EN, 1);
+
+/**
  * Flight-test excitation axis
  *
  * Selects the one axis that `fw_gain_design excite start` may test. An

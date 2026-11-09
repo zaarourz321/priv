@@ -26,11 +26,20 @@ float32[3] rate_cl_zeta
 float32[3] rate_a
 float32[3] rate_b
 
+# Rate plant selected per axis: 1 = aerodynamic first-order plant,
+# 2 = first-order plant plus a first-order actuator. Actuator time constants
+# are NaN for a first-order plant. rate_extra_pole is the third closed-loop
+# pole selected by the actuator-augmented PI design. [rad/s]
+uint8[3] rate_plant_order
+float32[3] rate_actuator_tc
+float32[3] rate_extra_pole
+
 # PI plus direct steady-state feed-forward gains for the unscaled normalized
 # surface command. P units: command/(rad/s), I: command/rad, FF: command/(rad/s).
 float32[3] surface_rate_p
 float32[3] surface_rate_i
 float32[3] surface_rate_ff
+bool[3] rate_ff_enabled
 
 # Equivalent values for FW_RR_*, FW_PR_*, and FW_YR_* at this airspeed. These
 # include the existing PX4 fixed-wing airspeed scaling when it is enabled.

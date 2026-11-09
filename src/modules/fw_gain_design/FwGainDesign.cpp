@@ -288,9 +288,13 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 		design.rate_cl_zeta[axis] = NAN;
 		design.rate_a[axis] = NAN;
 		design.rate_b[axis] = NAN;
+		design.rate_plant_order[axis] = 0;
+		design.rate_actuator_tc[axis] = NAN;
+		design.rate_extra_pole[axis] = NAN;
 		design.surface_rate_p[axis] = NAN;
 		design.surface_rate_i[axis] = NAN;
 		design.surface_rate_ff[axis] = NAN;
+		design.rate_ff_enabled[axis] = false;
 		design.px4_rate_p[axis] = NAN;
 		design.px4_rate_i[axis] = NAN;
 		design.px4_rate_ff[axis] = NAN;
@@ -337,6 +341,15 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 		const float damping_ratio[AXIS_COUNT] = {
 			_param_fw_gd_r_zeta.get(), _param_fw_gd_p_zeta.get(), _param_fw_gd_y_zeta.get()
 		};
+		const int32_t plant_order[AXIS_COUNT] = {
+			_param_fw_gd_r_ord.get(), _param_fw_gd_p_ord.get(), _param_fw_gd_y_ord.get()
+		};
+		const float actuator_tc[AXIS_COUNT] = {
+			_param_fw_gd_r_atc.get(), _param_fw_gd_p_atc.get(), _param_fw_gd_y_atc.get()
+		};
+		const int32_t feedforward_enabled[AXIS_COUNT] = {
+			_param_fw_gd_r_ff_en.get(), _param_fw_gd_p_ff_en.get(), _param_fw_gd_y_ff_en.get()
+		};
 
 		for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
 			const Axis model_axis = static_cast<Axis>(axis);
@@ -362,11 +375,18 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 		design.px4_airspeed = design.airspeed * sqrtf(rho / 1.225f);
 
 		for (uint8_t axis = 0; axis < AXIS_COUNT; ++axis) {
+			const Axis model_axis = static_cast<Axis>(axis);
 			const float length = reference_length[axis];
 
 			if (!PX4_ISFINITE(damping_coefficient[axis]) || !PX4_ISFINITE(control_coefficient[axis])
 			    || !PX4_ISFINITE(bandwidth_ratio[axis]) || !PX4_ISFINITE(damping_ratio[axis])
 			    || !PX4_ISFINITE(length) || !PX4_ISFINITE(control_range[axis]) || !PX4_ISFINITE(inertia[axis])
+			    || (plant_order[axis] != 1 && plant_order[axis] != 2)
+			    || (feedforward_enabled[axis] != 0 && feedforward_enabled[axis] != 1)
+			    // Flight-test estimates identify command-to-rate dynamics already,
+			    // including the installed actuator. Adding it again would double count.
+			    || (plant_order[axis] == 2 && model_source_is_estimated(model_axis))
+			    || (plant_order[axis] == 2 && (!PX4_ISFINITE(actuator_tc[axis]) || actuator_tc[axis] <= 0.f))
 			    || length <= 0.f || control_range[axis] <= 0.f || inertia[axis] <= 0.f) {
 				design.axis_status[axis] = fw_gain_design_s::AXIS_STATUS_INVALID_INPUT;
 				continue;
@@ -383,6 +403,12 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 
 			design.rate_a[axis] = rate_a;
 			design.rate_b[axis] = rate_b;
+			design.rate_plant_order[axis] = static_cast<uint8_t>(plant_order[axis]);
+			design.rate_ff_enabled[axis] = feedforward_enabled[axis] != 0;
+
+			if (plant_order[axis] == 2) {
+				design.rate_actuator_tc[axis] = actuator_tc[axis];
+			}
 
 			if (!PX4_ISFINITE(rate_a) || !PX4_ISFINITE(rate_b)) {
 				design.axis_status[axis] = fw_gain_design_s::AXIS_STATUS_NONFINITE_RESULT;
@@ -403,7 +429,11 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 				continue;
 			}
 
-			const float aircraft_bw = -rate_a;
+			const float aerodynamic_bw = -rate_a;
+			// With an actuator-augmented model, the lower of the aerodynamic
+			// damping pole and actuator pole is the usable open-loop rate bandwidth.
+			const float actuator_pole = plant_order[axis] == 2 ? 1.f / actuator_tc[axis] : NAN;
+			const float aircraft_bw = plant_order[axis] == 2 ? fminf(aerodynamic_bw, actuator_pole) : aerodynamic_bw;
 			const float closed_loop_bw = bandwidth_ratio[axis] * aircraft_bw;
 
 			if (bandwidth_ratio[axis] <= 0.f || damping_ratio[axis] <= 0.f || !PX4_ISFINITE(closed_loop_bw)
@@ -412,14 +442,40 @@ void FwGainDesign::calculate_design(float true_airspeed, fw_gain_design_s &desig
 				continue;
 			}
 
-			// Plant: G(s) = b / (s + aircraft_bw), controller: C(s) = Kp + Ki/s.
-			// Matching s^2 + 2*zeta*wc*s + wc^2 gives the two gains below.
-			const float surface_p = (2.f * damping_ratio[axis] * closed_loop_bw - aircraft_bw) / rate_b;
-			const float surface_i = closed_loop_bw * closed_loop_bw / rate_b;
+			float surface_p = NAN;
+			float surface_i = NAN;
+
+			if (plant_order[axis] == 1) {
+				// Plant: G(s) = b / (s + aerodynamic_bw), controller: C(s) = Kp + Ki/s.
+				// Matching s^2 + 2*zeta*wc*s + wc^2 gives the two gains below.
+				surface_p = (2.f * damping_ratio[axis] * closed_loop_bw - aerodynamic_bw) / rate_b;
+				surface_i = closed_loop_bw * closed_loop_bw / rate_b;
+
+			} else {
+				// Plant: G(s) = b / ((s + aerodynamic_bw) * (actuator_tc*s + 1)).
+				// PI control yields a third-order closed-loop polynomial. Keep the
+				// requested dominant pair (wc, zeta) and select the remaining real
+				// pole from the fixed s^2 coefficient of the physical plant.
+				const float extra_pole = aerodynamic_bw + actuator_pole
+							 - 2.f * damping_ratio[axis] * closed_loop_bw;
+
+				if (!PX4_ISFINITE(extra_pole) || extra_pole <= 0.f) {
+					design.axis_status[axis] = fw_gain_design_s::AXIS_STATUS_INVALID_DESIGN;
+					continue;
+				}
+
+				design.rate_extra_pole[axis] = extra_pole;
+				surface_p = (actuator_tc[axis] * (closed_loop_bw * closed_loop_bw
+						+ 2.f * damping_ratio[axis] * closed_loop_bw * extra_pole) - aerodynamic_bw) / rate_b;
+				surface_i = actuator_tc[axis] * closed_loop_bw * closed_loop_bw * extra_pole / rate_b;
+			}
 			// PX4's direct rate feed-forward has no setpoint derivative. The exact
 			// useful term is therefore the equilibrium inverse, cancelling the
 			// aerodynamic rate damping at a non-zero constant rate setpoint.
-			const float surface_ff = aircraft_bw / rate_b;
+			// FF is a parallel reference path in FixedwingRateControl. It changes
+			// reference tracking, not the feedback characteristic polynomial, so
+			// the pole-placement P/I gains above are deliberately unchanged.
+			const float surface_ff = feedforward_enabled[axis] ? aerodynamic_bw / rate_b : 0.f;
 
 			if (!PX4_ISFINITE(surface_p) || !PX4_ISFINITE(surface_i) || !PX4_ISFINITE(surface_ff)) {
 				design.axis_status[axis] = fw_gain_design_s::AXIS_STATUS_NONFINITE_RESULT;

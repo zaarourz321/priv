@@ -45,6 +45,37 @@ airframe parameter. If an estimated source is selected but no valid estimate
 exists, that axis is invalid and its live gains are restored rather than
 falling back silently to manual values.
 
+## Optional actuator-augmented rate plant
+
+`FW_GD_R_ORD`, `FW_GD_P_ORD`, and `FW_GD_Y_ORD` default to `1`, preserving
+the original aerodynamic first-order design. Select `2` to augment that axis
+with a first-order actuator model using `FW_GD_R_ATC`, `FW_GD_P_ATC`, or
+`FW_GD_Y_ATC` respectively:
+
+```
+rate_dot = a * rate + b * surface
+surface_dot = (command - surface) / actuator_time_constant
+```
+
+The second-order plant is designed with the existing requested closed-loop
+natural frequency and damping ratio. The PI controller has three closed-loop
+poles; the requested pair is retained and the remaining stable real pole is
+calculated from the actuator and aerodynamic poles. `aircraft_rate_bw` reports
+the slower of those two open-loop poles, and `rate_extra_pole` reports the
+calculated third closed-loop pole. An invalid requested design is published as
+an invalid axis; no gains are applied. This option is for a manual aerodynamic
+model only: a flight-test model already identifies the installed command-to-rate
+dynamics, including actuator effects, and cannot be augmented a second time.
+
+## Per-axis rate feed-forward
+
+`FW_GD_R_FF_EN`, `FW_GD_P_FF_EN`, and `FW_GD_Y_FF_EN` independently select
+the steady-state aerodynamic feed-forward recommendation. They default to
+enabled. When disabled, the published and optionally applied FF gain is zero,
+leaving a PI-only rate controller. P and I do not change: PX4 adds its FF term
+in parallel with PI feedback, so FF changes reference tracking but not the
+feedback poles used for gain design.
+
 ## Optional SD-card model persistence
 
 `FW_GD_SD_MODEL=0` is the default: identified models remain in RAM only. Set
