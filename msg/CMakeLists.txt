@@ -89,6 +89,7 @@ set(msg_files
 	FailureDetectorStatus.msg
 	FwGainDesign.msg
 	FwGainDesignGains.msg
+	FwTrimStatus.msg
 	FollowTarget.msg
 	FollowTargetEstimator.msg
 	FollowTargetStatus.msg

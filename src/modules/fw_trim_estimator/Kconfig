@@ -1,0 +1,5 @@
+menuconfig MODULES_FW_TRIM_ESTIMATOR
+	bool "fw_trim_estimator"
+	default n
+	---help---
+		Enable the fixed-wing in-flight roll and pitch trim estimator.
